@@ -167,7 +167,10 @@ class PolicyStore:
         if self._mtime_ns == stat.st_mtime_ns:
             return self._cache
 
-        data = json.loads(self._path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Policy file {self._path} contains invalid JSON: {exc.msg}") from exc
         if not isinstance(data, dict):
             raise ValueError("Policy file must contain a JSON object")
         self._cache = data

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -91,6 +92,7 @@ class JsonStateStore:
         self._path = Path(path).expanduser().resolve() if path else None
         self._cache: dict[str, Any] | None = None
         self._mtime_ns: int | None = None
+        self._lock = threading.RLock()
 
     @property
     def path(self) -> Path | None:
@@ -100,40 +102,45 @@ class JsonStateStore:
         return {}
 
     def load(self) -> dict[str, Any]:
-        if self._path is None:
-            if self._cache is None:
+        with self._lock:
+            if self._path is None:
+                if self._cache is None:
+                    self._cache = self._empty()
+                self._mtime_ns = None
+                return self._cache
+
+            if not self._path.exists():
                 self._cache = self._empty()
-            self._mtime_ns = None
-            return self._cache
+                self._mtime_ns = None
+                return self._cache
 
-        if not self._path.exists():
-            self._cache = self._empty()
-            self._mtime_ns = None
-            return self._cache
+            stat = self._path.stat()
+            if self._cache is not None and self._mtime_ns == stat.st_mtime_ns:
+                return self._cache
 
-        stat = self._path.stat()
-        if self._cache is not None and self._mtime_ns == stat.st_mtime_ns:
-            return self._cache
-
-        data = json.loads(self._path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError(f"State file {self._path} must contain a JSON object")
-        self._cache = data
-        self._mtime_ns = stat.st_mtime_ns
-        return data
+            try:
+                data = json.loads(self._path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"State file {self._path} contains invalid JSON: {exc.msg}") from exc
+            if not isinstance(data, dict):
+                raise ValueError(f"State file {self._path} must contain a JSON object")
+            self._cache = data
+            self._mtime_ns = stat.st_mtime_ns
+            return data
 
     def save(self, data: dict[str, Any]) -> None:
-        if self._path is None:
+        with self._lock:
+            if self._path is None:
+                self._cache = data
+                self._mtime_ns = None
+                return
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.write_text(
+                json.dumps(data, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
             self._cache = data
-            self._mtime_ns = None
-            return
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
-            json.dumps(data, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        self._cache = data
-        self._mtime_ns = self._path.stat().st_mtime_ns
+            self._mtime_ns = self._path.stat().st_mtime_ns
 
 
 class SourceInventoryStore(JsonStateStore):
@@ -159,16 +166,17 @@ class SourceInventoryStore(JsonStateStore):
         return (_now_ts() - last_synced_at) >= max(0.0, refresh_sec)
 
     def replace_dialogs(self, dialogs: Iterable[dict[str, Any]]) -> dict[str, Any]:
-        entries = [dialog for dialog in dialogs if dialog.get("peer_key")]
-        data = {
-            "meta": {
-                "last_synced_at": _now_ts(),
-                "dialog_count": len(entries),
-            },
-            "dialogs": entries,
-        }
-        self.save(data)
-        return data
+        with self._lock:
+            entries = [dialog for dialog in dialogs if dialog.get("peer_key")]
+            data = {
+                "meta": {
+                    "last_synced_at": _now_ts(),
+                    "dialog_count": len(entries),
+                },
+                "dialogs": entries,
+            }
+            self.save(data)
+            return data
 
     def list_dialogs(
         self,
@@ -275,23 +283,24 @@ class DmCursorStore(JsonStateStore):
         }
 
     def ack(self, consumer_id: str, sender_key: str, message_id: int) -> int:
-        if message_id <= 0:
-            return self.get_cursor(consumer_id, sender_key)
+        with self._lock:
+            if message_id <= 0:
+                return self.get_cursor(consumer_id, sender_key)
 
-        data = self.load()
-        consumers = data.setdefault("consumers", {})
-        if not isinstance(consumers, dict):
-            consumers = {}
-            data["consumers"] = consumers
-        consumer = consumers.setdefault(consumer_id, {})
-        if not isinstance(consumer, dict):
-            consumer = {}
-            consumers[consumer_id] = consumer
+            data = self.load()
+            consumers = data.setdefault("consumers", {})
+            if not isinstance(consumers, dict):
+                consumers = {}
+                data["consumers"] = consumers
+            consumer = consumers.setdefault(consumer_id, {})
+            if not isinstance(consumer, dict):
+                consumer = {}
+                consumers[consumer_id] = consumer
 
-        current = consumer.get(sender_key, 0)
-        current_id = int(current) if isinstance(current, (int, float)) else 0
-        if message_id > current_id:
-            consumer[sender_key] = int(message_id)
-            self.save(data)
-            return int(message_id)
-        return current_id
+            current = consumer.get(sender_key, 0)
+            current_id = int(current) if isinstance(current, (int, float)) else 0
+            if message_id > current_id:
+                consumer[sender_key] = int(message_id)
+                self.save(data)
+                return int(message_id)
+            return current_id

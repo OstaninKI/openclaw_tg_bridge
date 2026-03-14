@@ -373,6 +373,19 @@ interface PluginApi {
   logger?: { warn: (s: string) => void };
 }
 
+type ChannelRuntimeCore = NonNullable<NonNullable<PluginApi["runtime"]>["channel"]>;
+
+type GatewayStartContext = {
+  account: ChannelAccountConfig;
+  accountId?: string;
+  cfg: Record<string, unknown>;
+  runtime?: PluginApi["runtime"];
+  channelRuntime?: ChannelRuntimeCore;
+  abortSignal?: AbortSignal;
+  getStatus?: () => unknown;
+  setStatus?: (value: unknown) => void;
+};
+
 function resolveDmScope(cfg: Record<string, unknown>): string {
   const session = cfg.session as Record<string, unknown> | undefined;
   const dmScope = typeof session?.dmScope === "string" ? session.dmScope : undefined;
@@ -557,6 +570,34 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+function nextPollBackoffMs(currentMs: number, baseMs: number, maxMs = 30000): number {
+  const normalizedBaseMs = Math.max(250, baseMs);
+  const normalizedCurrentMs = Math.max(normalizedBaseMs, currentMs);
+  return Math.min(maxMs, normalizedCurrentMs * 2);
+}
+
+function resolveChannelRuntime(ctx: GatewayStartContext): ChannelRuntimeCore {
+  const runtime = ctx.channelRuntime ?? ctx.runtime?.channel;
+  if (!runtime) {
+    throw new Error("OpenClaw channel runtime is not available.");
+  }
+  return runtime;
+}
+
+function updateGatewayStatus(ctx: GatewayStartContext, patch: Record<string, unknown>): void {
+  if (typeof ctx.setStatus !== "function") {
+    return;
+  }
+  const current = typeof ctx.getStatus === "function" ? ctx.getStatus() : undefined;
+  const currentStatus =
+    current && typeof current === "object" && !Array.isArray(current) ? (current as Record<string, unknown>) : {};
+  ctx.setStatus({
+    ...currentStatus,
+    accountId: ctx.account.accountId,
+    ...patch,
+  });
+}
+
 function buildDmTarget(senderId: string | number): string {
   return `${CHANNEL_ID}:${String(senderId)}`;
 }
@@ -640,12 +681,9 @@ async function processInboundDmEvent(params: {
   cfg: Record<string, unknown>;
   account: ChannelAccountConfig;
   event: DmInboxEvent;
-  runtime: NonNullable<PluginApi["runtime"]>;
+  channelRuntime: ChannelRuntimeCore;
 }): Promise<"processed" | "skipped"> {
-  const core = params.runtime.channel;
-  if (!core) {
-    throw new Error("OpenClaw channel runtime is not available.");
-  }
+  const core = params.channelRuntime;
   const senderId = String(params.event.sender_id);
   const configuredRoute = resolveConfiguredDmBinding(params.cfg, params.account, params.event);
   const route =
@@ -726,6 +764,8 @@ async function processInboundDmEvent(params: {
     storePath,
     sessionKey,
     ctx: ctxPayload,
+    createIfMissing: true,
+    updateLastRoute: true,
     onRecordError: (error: unknown) => {
       params.api.logger?.warn(`telegram-user-bridge session meta update failed: ${String(error)}`);
     },
@@ -750,10 +790,13 @@ async function startDmChannelMonitor(params: {
   api: PluginApi;
   cfg: Record<string, unknown>;
   account: ChannelAccountConfig;
-  runtime: NonNullable<PluginApi["runtime"]>;
+  channelRuntime: ChannelRuntimeCore;
   abortSignal?: AbortSignal;
+  statusContext?: GatewayStartContext;
 }): Promise<{ stop: () => Promise<void> }> {
   let stopped = false;
+  const basePollDelayMs = Math.max(250, params.account.pollIntervalMs);
+  let failureDelayMs = basePollDelayMs;
   const loop = (async () => {
     while (!stopped && !params.abortSignal?.aborted) {
       const response = await fetchBridgeWithConfig(
@@ -762,10 +805,24 @@ async function startDmChannelMonitor(params: {
         `/dm/inbox/poll?timeout_ms=${Math.max(1000, params.account.pollTimeoutMs)}&limit=10`
       );
       if (!response.ok) {
+        updateGatewayStatus(params.statusContext ?? { account: params.account, cfg: params.cfg }, {
+          mode: "degraded",
+          connected: false,
+          lastError: formatBridgeError(response),
+          retryInMs: failureDelayMs,
+        });
         params.api.logger?.warn(`telegram-user-bridge DM poll failed: ${formatBridgeError(response)}`);
-        await sleepWithAbort(params.account.pollIntervalMs, params.abortSignal);
+        await sleepWithAbort(failureDelayMs, params.abortSignal);
+        failureDelayMs = nextPollBackoffMs(failureDelayMs, basePollDelayMs);
         continue;
       }
+      failureDelayMs = basePollDelayMs;
+      updateGatewayStatus(params.statusContext ?? { account: params.account, cfg: params.cfg }, {
+        mode: "polling",
+        connected: true,
+        lastError: null,
+        retryInMs: 0,
+      });
       const events = ((response.data as { events?: DmInboxEvent[] } | undefined)?.events ?? []).filter(
         (event): event is DmInboxEvent => typeof event?.id === "number"
       );
@@ -782,14 +839,21 @@ async function startDmChannelMonitor(params: {
             cfg: params.cfg,
             account: params.account,
             event,
-            runtime: params.runtime,
+            channelRuntime: params.channelRuntime,
           });
           if (result === "processed" || result === "skipped") {
             await ackInboundDmEvent(params.account, event);
           }
         } catch (error) {
+          updateGatewayStatus(params.statusContext ?? { account: params.account, cfg: params.cfg }, {
+            mode: "degraded",
+            connected: false,
+            lastError: String(error),
+            retryInMs: failureDelayMs,
+          });
           params.api.logger?.warn(`telegram-user-bridge DM event failed: ${String(error)}`);
-          await sleepWithAbort(params.account.pollIntervalMs, params.abortSignal);
+          await sleepWithAbort(failureDelayMs, params.abortSignal);
+          failureDelayMs = nextPollBackoffMs(failureDelayMs, basePollDelayMs);
           break;
         }
       }
@@ -799,6 +863,10 @@ async function startDmChannelMonitor(params: {
   return {
     stop: async () => {
       stopped = true;
+      updateGatewayStatus(params.statusContext ?? { account: params.account, cfg: params.cfg }, {
+        mode: "stopped",
+        connected: false,
+      });
       await Promise.race([loop, sleepWithAbort(params.account.timeoutMs)]);
     },
   };
@@ -809,6 +877,7 @@ function registerDmChannel(api: PluginApi): void {
     return;
   }
   const pluginConfig = getConfig(api);
+  const runningAccounts = new Map<string, { stop: () => Promise<void> }>();
   const plugin = {
     id: CHANNEL_ID,
     meta: {
@@ -827,7 +896,7 @@ function registerDmChannel(api: PluginApi): void {
       nativeCommands: false,
       blockStreaming: true,
     },
-    reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
+    reload: { configPrefixes: [`channels.${CHANNEL_ID}`, `plugins.entries.${CHANNEL_ID}`] },
     config: {
       listAccountIds: (cfg: Record<string, unknown>) =>
         getDmChannelConfigFromConfig(cfg, pluginConfig)?.accounts.map((account) => account.accountId) ?? [],
@@ -862,25 +931,44 @@ function registerDmChannel(api: PluginApi): void {
       },
     },
     gateway: {
-      startAccount: async (ctx: {
-        account: ChannelAccountConfig;
-        cfg: Record<string, unknown>;
-        runtime: NonNullable<PluginApi["runtime"]>;
-        abortSignal?: AbortSignal;
-        setStatus?: (value: unknown) => void;
-      }) => {
+      startAccount: async (ctx: GatewayStartContext) => {
         const validationErrors = validateStrictDmAccountConfig(ctx.cfg, ctx.account);
         if (validationErrors.length > 0) {
           throw new Error(`telegram-user-bridge configuration error:\n- ${validationErrors.join("\n- ")}`);
         }
-        ctx.setStatus?.({ accountId: ctx.account.accountId, mode: "polling" });
-        return startDmChannelMonitor({
+        const existing = runningAccounts.get(ctx.account.accountId);
+        if (existing) {
+          await existing.stop();
+          runningAccounts.delete(ctx.account.accountId);
+        }
+        updateGatewayStatus(ctx, { mode: "starting", connected: false, lastError: null, retryInMs: 0 });
+        const handle = await startDmChannelMonitor({
           api,
           cfg: ctx.cfg,
           account: ctx.account,
-          runtime: ctx.runtime,
+          channelRuntime: resolveChannelRuntime(ctx),
           abortSignal: ctx.abortSignal,
+          statusContext: ctx,
         });
+        runningAccounts.set(ctx.account.accountId, handle);
+        return {
+          stop: async () => {
+            const current = runningAccounts.get(ctx.account.accountId);
+            if (current) {
+              runningAccounts.delete(ctx.account.accountId);
+              await current.stop();
+            }
+          },
+        };
+      },
+      stopAccount: async (ctx: GatewayStartContext) => {
+        const current = runningAccounts.get(ctx.account.accountId);
+        if (!current) {
+          updateGatewayStatus(ctx, { mode: "stopped", connected: false });
+          return;
+        }
+        runningAccounts.delete(ctx.account.accountId);
+        await current.stop();
       },
     },
   };
@@ -1092,6 +1180,7 @@ export const __test = {
   ackInboundDmEvent,
   collectRelevantDirectBindings,
   normalizePeerKey,
+  nextPollBackoffMs,
   resolveConfiguredDmBinding,
   validateStrictDmAccountConfig,
 };

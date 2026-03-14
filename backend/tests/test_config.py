@@ -140,6 +140,14 @@ class TestConfigHelpers(unittest.TestCase):
                     {"policy_profile": "missing"},
                 )
 
+    def test_invalid_policy_json_reports_file_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_file = Path(temp_dir) / "policy.json"
+            policy_file.write_text("{ invalid json", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, str(policy_file)):
+                PolicyStore(str(policy_file)).resolve(None)
+
 
 if __name__ == "__main__":
     unittest.main()

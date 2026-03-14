@@ -202,6 +202,19 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(messages[0]["chat_username"], "allowed")
         self.mock_tg.get_messages.assert_awaited_once_with(entity, limit=10, min_id=50)
 
+    async def test_get_messages_returns_oldest_first(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_messages.return_value = [
+            SimpleNamespace(id=52, text="newer", date="2026-03-14", out=False, sender_id=7),
+            SimpleNamespace(id=51, text="older", date="2026-03-14", out=False, sender_id=7),
+        ]
+
+        messages = await bridge.get_messages("42", limit=10, min_id=50)
+
+        self.assertEqual([message["id"] for message in messages], [51, 52])
+
     async def test_discover_source_dialogs_returns_serializable_inventory_entries(self) -> None:
         bridge = self.create_bridge()
         self.mock_tg.get_dialogs.return_value = [

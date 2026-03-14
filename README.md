@@ -35,6 +35,7 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - longer waits return `429` with `Retry-After`;
   - no hidden long sleeps after the OpenClaw-side timeout.
 - `get_messages(min_id=...)` for incremental polling and token savings.
+- Message reads are returned in ascending order (`oldest -> newest`) for safer checkpoint updates.
 - Richer message metadata for summaries:
   - `sender_id`
   - `sender_name`
@@ -440,6 +441,8 @@ For event-driven DMs, also configure `channels.telegram-user-bridge.accounts.<id
 Use numeric Telegram user ids there when possible. They are more stable than usernames for inbound routing and cursor tracking.
 With `strictPeerBindings: true`, the plugin accepts inbound DMs only when `cfg.bindings` contains an exact peer binding for that sender.
 The channel also retries `/dm/inbox/ack` with a short request-level backoff, because ack is idempotent and safe to retry; the full inbound reply flow is not retried wholesale.
+Channel reload now watches both `channels.telegram-user-bridge` and `plugins.entries.telegram-user-bridge`, so channel account changes and plugin profile changes reload through the standard OpenClaw mechanism.
+When `/dm/inbox/poll` keeps failing, the DM channel also backs off progressively instead of retrying every `pollIntervalMs`.
 
 ## Safety model
 

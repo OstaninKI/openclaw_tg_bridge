@@ -258,6 +258,11 @@ test("plugin registers DM channel and channel outbound uses backend send_message
 
   assert.equal(api.channels.length, 1);
   assert.equal(api.channels[0].id, "telegram-user-bridge");
+  assert.deepEqual(api.channels[0].reload.configPrefixes, [
+    "channels.telegram-user-bridge",
+    "plugins.entries.telegram-user-bridge",
+  ]);
+  assert.equal(typeof api.channels[0].gateway.stopAccount, "function");
 
   let capturedUrl = "";
   let capturedInit = undefined;
@@ -284,6 +289,91 @@ test("plugin registers DM channel and channel outbound uses backend send_message
   assert.equal(capturedInit.headers["X-OpenClaw-Allow-From"], "123");
   assert.equal(capturedInit.headers["X-OpenClaw-Write-To"], "123");
   assert.equal(sendResult.messageId, 321);
+});
+
+test("DM gateway startAccount works with channelRuntime and explicit stopAccount", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            strictPeerBindings: false,
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ events: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  const account = api.channels[0].config.resolveAccount(api.config, "default");
+  const abortController = new AbortController();
+  abortController.abort();
+  const statuses = [];
+  const channelRuntime = {
+    reply: {
+      resolveEnvelopeFormatOptions() {
+        return {};
+      },
+      formatAgentEnvelope({ body }) {
+        return body;
+      },
+      finalizeInboundContext(ctx) {
+        return ctx;
+      },
+      async dispatchReplyWithBufferedBlockDispatcher() {},
+    },
+    routing: {
+      resolveAgentRoute() {
+        return { agentId: "owner-agent", accountId: "default", sessionKey: "test" };
+      },
+      buildAgentSessionKey() {
+        return "test";
+      },
+    },
+    session: {
+      resolveStorePath() {
+        return "/tmp/test";
+      },
+      readSessionUpdatedAt() {
+        return 0;
+      },
+      async recordInboundSession() {},
+    },
+  };
+
+  const handle = await api.channels[0].gateway.startAccount({
+    account,
+    cfg: api.config,
+    channelRuntime,
+    abortSignal: abortController.signal,
+    getStatus() {
+      return statuses.at(-1) ?? null;
+    },
+    setStatus(value) {
+      statuses.push(value);
+    },
+  });
+
+  assert.equal(typeof handle.stop, "function");
+  await api.channels[0].gateway.stopAccount({
+    account,
+    cfg: api.config,
+    channelRuntime,
+    setStatus(value) {
+      statuses.push(value);
+    },
+    getStatus() {
+      return statuses.at(-1) ?? null;
+    },
+  });
+  assert.match(JSON.stringify(statuses), /stopped/);
 });
 
 test("strict DM binding resolves exact sender to agent", () => {
@@ -447,4 +537,10 @@ test("ack helper retries transient failures and eventually succeeds", async () =
 
   assert.equal(calls.length, 3);
   assert.equal(calls[0].url, "http://127.0.0.1:8765/dm/inbox/ack");
+});
+
+test("poll backoff helper doubles delay and caps it", () => {
+  assert.equal(__test.nextPollBackoffMs(1500, 1500), 3000);
+  assert.equal(__test.nextPollBackoffMs(3000, 1500), 6000);
+  assert.equal(__test.nextPollBackoffMs(20000, 1500), 30000);
 });

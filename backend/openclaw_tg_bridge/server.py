@@ -3,6 +3,7 @@
 import asyncio
 import hmac
 import logging
+import time
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from openclaw_tg_bridge.client import BridgeClient, BridgeError, _normalize_peer
+from openclaw_tg_bridge.client import BridgeClient, BridgeError, _normalize_peer, _serialize_message
 from openclaw_tg_bridge.config import (
     PolicyStore,
     load_config,
@@ -31,6 +32,7 @@ _policy_store: PolicyStore | None = None
 _sources_store: SourceInventoryStore | None = None
 _dm_cursor_store: DmCursorStore | None = None
 _dm_broker: "DmInboxBroker | None" = None
+_resolved_peer_cache: "ResolvedPeerCache | None" = None
 
 
 def get_bridge() -> BridgeClient:
@@ -69,6 +71,12 @@ def get_dm_broker() -> "DmInboxBroker":
     return _dm_broker
 
 
+def get_resolved_peer_cache() -> "ResolvedPeerCache":
+    if _resolved_peer_cache is None:
+        raise RuntimeError("Resolved peer cache not loaded")
+    return _resolved_peer_cache
+
+
 @dataclass(frozen=True)
 class InboundDmEvent:
     sender_key: str
@@ -81,6 +89,32 @@ class AllowedDmSender:
     peer_ref: str
     cursor_key: str
     match_keys: frozenset[str]
+
+
+class ResolvedPeerCache:
+    def __init__(self, ttl_sec: float = 300.0) -> None:
+        self._ttl_sec = max(1.0, ttl_sec)
+        self._entries: dict[str, tuple[float, dict[str, str | None]]] = {}
+        self._lock = asyncio.Lock()
+
+    async def resolve(self, bridge: BridgeClient, peer: str | int) -> dict[str, str | None]:
+        normalized = _normalize_peer(peer)
+        if normalized and normalized not in {"*", "me"} and normalized.lstrip("-").isdigit():
+            return {
+                "peer": normalized,
+                "id": normalized,
+                "username": None,
+            }
+
+        cache_key = normalized or str(peer).strip()
+        now = time.monotonic()
+        async with self._lock:
+            cached = self._entries.get(cache_key)
+            if cached and cached[0] > now:
+                return dict(cached[1])
+            identifiers = await bridge.resolve_peer_identifiers(peer)
+            self._entries[cache_key] = (now + self._ttl_sec, dict(identifiers))
+            return dict(identifiers)
 
 
 class DmInboxBroker:
@@ -207,7 +241,7 @@ async def _create_client() -> BridgeClient:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _bridge, _config, _policy_store, _sources_store, _dm_cursor_store, _dm_broker
+    global _bridge, _config, _policy_store, _sources_store, _dm_cursor_store, _dm_broker, _resolved_peer_cache
     from telethon import events
 
     _config = load_config()
@@ -215,6 +249,7 @@ async def lifespan(app: FastAPI):
     _sources_store = SourceInventoryStore(_config.get("sources_inventory_path"))
     _dm_cursor_store = DmCursorStore(_config.get("inbox_state_path"))
     _dm_broker = DmInboxBroker()
+    _resolved_peer_cache = ResolvedPeerCache()
     try:
         _bridge = await _create_client()
 
@@ -224,29 +259,24 @@ async def lifespan(app: FastAPI):
             message = getattr(event, "message", None)
             if message is None or getattr(message, "out", False):
                 return
-            payload = {
-                "id": getattr(message, "id", None),
-                "text": getattr(message, "text", None) or "",
-                "date": str(getattr(message, "date", "")),
-                "date_unix": int(getattr(getattr(message, "date", None), "timestamp", lambda: 0)() or 0),
-                "out": getattr(message, "out", None),
-                "sender_id": getattr(message, "sender_id", None),
-                "sender_name": None,
-                "sender_username": getattr(getattr(message, "sender", None), "username", None),
-                "chat_id": getattr(getattr(event, "chat", None), "id", None) or getattr(message, "sender_id", None),
-                "chat_title": None,
-                "chat_username": getattr(getattr(event, "chat", None), "username", None),
-                "chat_type": "direct",
-                "topic_id": None,
-                "reply_to_message_id": getattr(message, "reply_to_msg_id", None),
-            }
             sender = getattr(message, "sender", None)
-            if sender is not None:
-                first_name = getattr(sender, "first_name", None) or ""
-                last_name = getattr(sender, "last_name", None) or ""
-                full_name = f"{first_name} {last_name}".strip()
-                payload["sender_name"] = full_name or (f"@{payload['sender_username']}" if payload["sender_username"] else None)
-                payload["chat_title"] = payload["sender_name"]
+            if sender is None:
+                for resolver_name in ("get_sender",):
+                    resolver = getattr(message, resolver_name, None) or getattr(event, resolver_name, None)
+                    if not callable(resolver):
+                        continue
+                    try:
+                        resolved = resolver()
+                        sender = await resolved if hasattr(resolved, "__await__") else resolved
+                    except Exception:
+                        logger.debug("Unable to resolve sender for inbound DM", exc_info=True)
+                        sender = None
+                    if sender is not None:
+                        break
+            payload = _serialize_message(message, entity=sender or getattr(event, "chat", None))
+            payload["chat_type"] = "direct"
+            if payload.get("chat_title") is None:
+                payload["chat_title"] = payload.get("sender_name")
             await get_dm_broker().push(payload)
 
         _bridge.client.add_event_handler(_on_new_dm, events.NewMessage(incoming=True))
@@ -261,6 +291,7 @@ async def lifespan(app: FastAPI):
         _sources_store = None
         _dm_cursor_store = None
         _dm_broker = None
+        _resolved_peer_cache = None
 
 
 app = FastAPI(title="OpenClaw Telegram Bridge", lifespan=lifespan)
@@ -344,6 +375,7 @@ def _source_entry_matches_policy(entry: dict, policy: dict) -> bool:
 
 
 async def _apply_source_discovery(policy: dict) -> dict:
+    policy = dict(policy)
     if not policy.get("sources_auto_discover"):
         return policy
 
@@ -387,7 +419,7 @@ async def _resolve_allowed_dm_senders(bridge: BridgeClient, policy: dict) -> lis
         normalized = _normalize_peer(value)
         if normalized in {"", "*", "me"}:
             continue
-        identifiers = await bridge.resolve_peer_identifiers(value)
+        identifiers = await get_resolved_peer_cache().resolve(bridge, value)
         cursor_key = identifiers.get("id") or identifiers.get("peer")
         if not cursor_key or cursor_key in seen_cursor_keys:
             continue

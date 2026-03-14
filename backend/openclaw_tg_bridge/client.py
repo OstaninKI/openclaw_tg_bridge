@@ -635,7 +635,7 @@ class BridgeClient:
             **kwargs,
         )
         out = []
-        for message in messages:
+        for message in reversed(list(messages)):
             if message is None:
                 continue
             out.append(_serialize_message(message, entity=entity))
