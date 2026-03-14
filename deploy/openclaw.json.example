@@ -1,4 +1,7 @@
 {
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
   "plugins": {
     "enabled": true,
     "allow": ["telegram-user-bridge"],
@@ -11,37 +14,76 @@
           "timeoutMs": 25000,
           "profiles": [
             {
-              "id": "owner",
-              "label": "Owner",
-              "policyProfile": "owner"
+              "id": "owner_dm",
+              "label": "Owner DM",
+              "mode": "interactive",
+              "policyProfile": "owner_dm"
             },
             {
-              "id": "wife",
-              "label": "Wife",
-              "policyProfile": "wife"
+              "id": "wife_dm",
+              "label": "Wife DM",
+              "mode": "interactive",
+              "policyProfile": "wife_dm"
             },
             {
-              "id": "shared",
-              "label": "Shared",
-              "policyProfile": "shared"
+              "id": "sources_ro",
+              "label": "Sources RO",
+              "mode": "sources_ro",
+              "policyProfile": "sources_ro"
             }
           ]
         }
       }
     }
   },
+  "channels": {
+    "telegram-user-bridge": {
+      "accounts": {
+        "default": {
+          "enabled": true,
+          "label": "Telegram User DM",
+          "baseUrl": "http://127.0.0.1:8765",
+          "apiToken": "change-me",
+          "policyProfile": "dm_inbox",
+          "strictPeerBindings": true,
+          "allowFrom": ["123456789", "987654321"],
+          "writeTo": ["123456789", "987654321"],
+          "pollTimeoutMs": 25000,
+          "pollIntervalMs": 1500
+        }
+      }
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "owner-agent",
+      "match": {
+        "channel": "telegram-user-bridge",
+        "accountId": "default",
+        "peer": { "kind": "direct", "id": "123456789" }
+      }
+    },
+    {
+      "agentId": "wife-agent",
+      "match": {
+        "channel": "telegram-user-bridge",
+        "accountId": "default",
+        "peer": { "kind": "direct", "id": "987654321" }
+      }
+    }
+  ],
   "agents": {
     "list": [
       {
         "id": "owner-agent",
         "tools": {
           "allow": [
-            "telegram_owner_get_dialogs",
-            "telegram_owner_get_messages",
-            "telegram_owner_send_message",
-            "telegram_shared_get_dialogs",
-            "telegram_shared_get_messages",
-            "telegram_shared_send_message"
+            "telegram_owner_dm_get_dialogs",
+            "telegram_owner_dm_get_messages",
+            "telegram_owner_dm_send_message",
+            "telegram_sources_ro_list_sources",
+            "telegram_sources_ro_sync_sources",
+            "telegram_sources_ro_get_messages"
           ]
         }
       },
@@ -49,12 +91,12 @@
         "id": "wife-agent",
         "tools": {
           "allow": [
-            "telegram_wife_get_dialogs",
-            "telegram_wife_get_messages",
-            "telegram_wife_send_message",
-            "telegram_shared_get_dialogs",
-            "telegram_shared_get_messages",
-            "telegram_shared_send_message"
+            "telegram_wife_dm_get_dialogs",
+            "telegram_wife_dm_get_messages",
+            "telegram_wife_dm_send_message",
+            "telegram_sources_ro_list_sources",
+            "telegram_sources_ro_sync_sources",
+            "telegram_sources_ro_get_messages"
           ]
         }
       }

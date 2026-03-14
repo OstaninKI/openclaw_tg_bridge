@@ -90,6 +90,15 @@ def load_config() -> dict[str, Any]:
     flood_wait_max_sleep_sec = _get_float("TELEGRAM_FLOOD_WAIT_MAX_SLEEP_SEC") or 3.0
     policy_path = os.environ.get("TELEGRAM_POLICY_PATH", "").strip()
     policy_default_profile = os.environ.get("TELEGRAM_POLICY_DEFAULT_PROFILE", "").strip()
+    default_state_dir = (
+        Path(policy_path).expanduser().resolve().parent
+        if policy_path
+        else (Path.home() / ".openclaw" / "telethon")
+    )
+    sources_inventory_path = os.environ.get("TELEGRAM_SOURCES_INVENTORY_PATH", "").strip()
+    inbox_state_path = os.environ.get("TELEGRAM_INBOX_STATE_PATH", "").strip()
+    sources_refresh_sec = _get_float("TELEGRAM_SOURCES_REFRESH_SEC") or 300.0
+    sources_dialog_limit = _get_int("TELEGRAM_SOURCES_DIALOG_LIMIT") or 500
 
     proxy = None
     proxy_type = os.environ.get("TELEGRAM_PROXY_TYPE", "").strip().lower()
@@ -123,6 +132,10 @@ def load_config() -> dict[str, Any]:
         "proxy": proxy,
         "policy_path": policy_path or None,
         "policy_default_profile": policy_default_profile or None,
+        "sources_inventory_path": sources_inventory_path or str(default_state_dir / "sources_inventory.json"),
+        "inbox_state_path": inbox_state_path or str(default_state_dir / "dm_inbox_state.json"),
+        "sources_refresh_sec": max(0.0, sources_refresh_sec),
+        "sources_dialog_limit": min(max(50, sources_dialog_limit), 2000),
     }
 
 
@@ -228,14 +241,23 @@ def resolve_effective_policy(
         "read_deny_chat_ids": list(config["deny_chat_ids"]) if config["deny_chat_ids"] else None,
         "write_allow_chat_ids": list(config["write_allow_chat_ids"]),
         "write_deny_chat_ids": list(config["write_deny_chat_ids"]) if config["write_deny_chat_ids"] else None,
+        "sources_auto_discover": False,
+        "sources_include_types": None,
+        "sources_exclude_peers": [],
+        "sources_exclude_usernames": [],
     }
 
     policy_data = policy_store.resolve(profile_id)
     if policy_data:
         read_policy = policy_data.get("read", {})
         write_policy = policy_data.get("write", {})
-        if not isinstance(read_policy, dict) or not isinstance(write_policy, dict):
-            raise ValueError("Policy file read/write sections must be objects")
+        sources_policy = policy_data.get("sources", {})
+        if (
+            not isinstance(read_policy, dict)
+            or not isinstance(write_policy, dict)
+            or not isinstance(sources_policy, dict)
+        ):
+            raise ValueError("Policy file read/write/sources sections must be objects")
 
         if "replyDelaySec" in policy_data:
             merged["reply_delay_sec"] = max(0.0, float(policy_data["replyDelaySec"]))
@@ -250,6 +272,14 @@ def resolve_effective_policy(
             merged["write_allow_chat_ids"] = list(write_policy["allow"] or [])
         if "deny" in write_policy:
             merged["write_deny_chat_ids"] = list(write_policy["deny"] or [])
+        if "autoDiscover" in sources_policy:
+            merged["sources_auto_discover"] = bool(sources_policy["autoDiscover"])
+        if "includeTypes" in sources_policy:
+            merged["sources_include_types"] = list(sources_policy["includeTypes"] or [])
+        if "excludePeers" in sources_policy:
+            merged["sources_exclude_peers"] = list(sources_policy["excludePeers"] or [])
+        if "excludeUsernames" in sources_policy:
+            merged["sources_exclude_usernames"] = list(sources_policy["excludeUsernames"] or [])
 
     for key in (
         "reply_delay_sec",

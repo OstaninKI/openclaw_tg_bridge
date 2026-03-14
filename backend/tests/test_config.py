@@ -76,6 +76,11 @@ class TestConfigHelpers(unittest.TestCase):
                             "shared": {
                                 "read": {"allow": ["-1001", "@news"]},
                                 "write": {"allow": []},
+                                "sources": {
+                                    "autoDiscover": True,
+                                    "includeTypes": ["channel", "supergroup"],
+                                    "excludeUsernames": ["private_feed"],
+                                },
                             },
                         },
                     }
@@ -103,6 +108,16 @@ class TestConfigHelpers(unittest.TestCase):
             self.assertEqual(effective["read_allow_chat_ids"], ["me", "-1001"])
             self.assertEqual(effective["write_allow_chat_ids"], ["me"])
             self.assertEqual(effective["read_deny_chat_ids"], ["blocked"])
+            self.assertFalse(effective["sources_auto_discover"])
+
+            shared_effective = resolve_effective_policy(
+                {**config, "policy_default_profile": "shared"},
+                PolicyStore(str(policy_file)),
+            )
+
+            self.assertTrue(shared_effective["sources_auto_discover"])
+            self.assertEqual(shared_effective["sources_include_types"], ["channel", "supergroup"])
+            self.assertEqual(shared_effective["sources_exclude_usernames"], ["private_feed"])
 
     def test_unknown_profile_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -5,7 +5,10 @@ import inspect
 import logging
 import random
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Iterable
+
+from openclaw_tg_bridge.state import dialog_to_inventory_entry
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +115,95 @@ def _normalize_peer_list(peers: Iterable[str] | None) -> frozenset[str]:
         for peer in (peers or [])
         if (normalized := _normalize_peer(peer))
     )
+
+
+def _entity_display_name(entity: Any | None) -> str | None:
+    if entity is None:
+        return None
+    title = getattr(entity, "title", None)
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    first_name = getattr(entity, "first_name", None) or ""
+    last_name = getattr(entity, "last_name", None) or ""
+    full_name = f"{first_name} {last_name}".strip()
+    if full_name:
+        return full_name
+    username = getattr(entity, "username", None)
+    if username:
+        return f"@{username}"
+    return None
+
+
+def _isoformat(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value is None:
+        return None
+    return str(value)
+
+
+def _message_topic_id(message: Any) -> int | None:
+    for attr in ("reply_to_top_id", "topic_id", "top_msg_id"):
+        value = getattr(message, attr, None)
+        if isinstance(value, int):
+            return value
+    reply_to = getattr(message, "reply_to", None)
+    if reply_to is None:
+        return None
+    for attr in ("reply_to_top_id", "top_msg_id"):
+        value = getattr(reply_to, attr, None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _message_sender_name(message: Any) -> str | None:
+    sender = getattr(message, "sender", None)
+    if sender is not None:
+        sender_name = _entity_display_name(sender)
+        if sender_name:
+            return sender_name
+    post_author = getattr(message, "post_author", None)
+    if isinstance(post_author, str) and post_author.strip():
+        return post_author.strip()
+    return None
+
+
+def _resolve_chat_type(entity: Any | None) -> str:
+    if entity is None:
+        return "unknown"
+    if getattr(entity, "forum", False):
+        return "forum"
+    if getattr(entity, "broadcast", False):
+        return "channel"
+    if getattr(entity, "megagroup", False):
+        return "supergroup"
+    if getattr(entity, "title", None) is not None:
+        return "group"
+    if getattr(entity, "first_name", None) is not None or getattr(entity, "last_name", None) is not None:
+        return "direct"
+    return "unknown"
+
+
+def _serialize_message(message: Any, *, entity: Any | None = None) -> dict[str, Any]:
+    chat_entity = entity or getattr(message, "chat", None) or getattr(message, "sender", None)
+    date_value = getattr(message, "date", None)
+    return {
+        "id": getattr(message, "id", None),
+        "text": getattr(message, "text", None) or "",
+        "date": _isoformat(date_value),
+        "date_unix": int(date_value.timestamp()) if isinstance(date_value, datetime) else 0,
+        "out": getattr(message, "out", None),
+        "sender_id": getattr(message, "sender_id", None),
+        "sender_name": _message_sender_name(message),
+        "sender_username": getattr(getattr(message, "sender", None), "username", None),
+        "chat_id": getattr(chat_entity, "id", None),
+        "chat_title": _entity_display_name(chat_entity),
+        "chat_username": getattr(chat_entity, "username", None),
+        "chat_type": _resolve_chat_type(chat_entity),
+        "topic_id": _message_topic_id(message),
+        "reply_to_message_id": getattr(message, "reply_to_msg_id", None),
+    }
 
 
 def build_scope(
@@ -458,6 +550,63 @@ class BridgeClient:
             )
         return out
 
+    async def discover_source_dialogs(self, limit: int = 500) -> list[dict[str, Any]]:
+        if not await self.ensure_connected():
+            raise BridgeUnavailableError("Telegram bridge is not connected.")
+        dialogs = await self._call_telegram(
+            self._client.get_dialogs,
+            limit=min(max(1, limit), 2000),
+            action="list source dialogs",
+        )
+        out = []
+        for dialog in dialogs:
+            entry = dialog_to_inventory_entry(dialog)
+            if entry.get("peer_key"):
+                out.append(entry)
+        return out
+
+    async def resolve_peer_identifiers(self, peer: str | int) -> dict[str, str | None]:
+        entity = await self._resolve_entity(peer, action="resolve peer")
+        return {
+            "peer": _normalize_peer(peer),
+            "id": _normalize_peer(getattr(entity, "id", None)) or None,
+            "username": _normalize_peer(getattr(entity, "username", None)) or None,
+        }
+
+    async def get_incoming_direct_messages(
+        self,
+        peer: str | int,
+        *,
+        min_id: int | None = None,
+        limit: int = 20,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        entity = await self._resolve_entity(peer, action="read incoming direct messages")
+        candidate_keys = _build_candidate_keys(peer=peer, entity=entity)
+        self._check_scope(
+            scope=policy.read_scope,
+            candidate_keys=candidate_keys,
+            peer=peer,
+            action="reading",
+        )
+
+        kwargs: dict[str, Any] = {"limit": min(max(1, limit), 50)}
+        if min_id is not None:
+            kwargs["min_id"] = min_id
+        messages = await self._call_telegram(
+            self._client.get_messages,
+            entity,
+            action="read incoming direct messages",
+            **kwargs,
+        )
+        out = []
+        for message in reversed(list(messages)):
+            if message is None or getattr(message, "out", False):
+                continue
+            out.append(_serialize_message(message, entity=entity))
+        return out
+
     async def get_messages(
         self,
         peer: str | int,
@@ -489,14 +638,7 @@ class BridgeClient:
         for message in messages:
             if message is None:
                 continue
-            out.append(
-                {
-                    "id": getattr(message, "id", None),
-                    "text": getattr(message, "text", None) or "",
-                    "date": str(getattr(message, "date", "")),
-                    "out": getattr(message, "out", None),
-                }
-            )
+            out.append(_serialize_message(message, entity=entity))
         return out
 
     async def disconnect(self) -> None:

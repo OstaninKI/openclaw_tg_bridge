@@ -179,13 +179,76 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         entity = SimpleNamespace(id=42, username="allowed")
         self.mock_tg.get_entity.return_value = entity
         self.mock_tg.get_messages.return_value = [
-            SimpleNamespace(id=51, text="delta", date="2026-03-14", out=False),
+            SimpleNamespace(
+                id=51,
+                text="delta",
+                date="2026-03-14",
+                out=False,
+                sender_id=7,
+                sender=SimpleNamespace(first_name="Alice", last_name=None, username="alice"),
+                reply_to=SimpleNamespace(reply_to_top_id=900),
+                reply_to_msg_id=50,
+            ),
         ]
 
         messages = await bridge.get_messages("42", limit=10, min_id=50)
 
         self.assertEqual(messages[0]["id"], 51)
+        self.assertEqual(messages[0]["sender_id"], 7)
+        self.assertEqual(messages[0]["sender_name"], "Alice")
+        self.assertEqual(messages[0]["topic_id"], 900)
+        self.assertEqual(messages[0]["reply_to_message_id"], 50)
+        self.assertEqual(messages[0]["chat_id"], 42)
+        self.assertEqual(messages[0]["chat_username"], "allowed")
         self.mock_tg.get_messages.assert_awaited_once_with(entity, limit=10, min_id=50)
+
+    async def test_discover_source_dialogs_returns_serializable_inventory_entries(self) -> None:
+        bridge = self.create_bridge()
+        self.mock_tg.get_dialogs.return_value = [
+            SimpleNamespace(
+                id=-1001,
+                is_channel=True,
+                is_group=False,
+                is_user=False,
+                entity=SimpleNamespace(id=-1001, username="news", title="News", broadcast=True, forum=False),
+            ),
+            SimpleNamespace(
+                id=55,
+                is_channel=False,
+                is_group=False,
+                is_user=True,
+                entity=SimpleNamespace(id=55, username="friend", first_name="Friend"),
+            ),
+        ]
+
+        entries = await bridge.discover_source_dialogs(limit=100)
+
+        self.assertEqual(entries[0]["peer_id"], -1001)
+        self.assertEqual(entries[0]["username"], "news")
+        self.assertEqual(entries[0]["type"], "channel")
+        self.assertEqual(entries[1]["type"], "user")
+
+    async def test_resolve_peer_identifiers_returns_id_and_username(self) -> None:
+        bridge = self.create_bridge()
+        self.mock_tg.get_entity.return_value = SimpleNamespace(id=42, username="AllowedUser")
+
+        identifiers = await bridge.resolve_peer_identifiers("@AllowedUser")
+
+        self.assertEqual(identifiers["id"], "42")
+        self.assertEqual(identifiers["username"], "alloweduser")
+
+    async def test_get_incoming_direct_messages_skips_outbound_messages(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed", first_name="Allowed")
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_messages.return_value = [
+            SimpleNamespace(id=9, text="outbound", date="2026-03-14", out=True, sender_id=42),
+            SimpleNamespace(id=10, text="inbound", date="2026-03-14", out=False, sender_id=42),
+        ]
+
+        messages = await bridge.get_incoming_direct_messages("42", min_id=8, limit=10)
+
+        self.assertEqual([message["id"] for message in messages], [10])
 
 
 if __name__ == "__main__":

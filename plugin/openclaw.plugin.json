@@ -2,7 +2,7 @@
   "id": "telegram-user-bridge",
   "name": "Unofficial Telegram User Bridge",
   "version": "0.1.0",
-  "description": "Agent tools for one live Telegram user account with isolated OpenClaw contexts and backend-enforced policies.",
+  "description": "Agent tools and DM channel for one live Telegram user account with isolated OpenClaw contexts and backend-enforced policies.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -65,6 +65,12 @@
             "id": { "type": "string", "description": "Stable tool/profile id, for example owner, wife, shared" },
             "label": { "type": "string", "description": "Human-readable label used in tool descriptions" },
             "enabled": { "type": "boolean", "default": true },
+            "mode": {
+              "type": "string",
+              "enum": ["interactive", "sources_ro"],
+              "default": "interactive",
+              "description": "interactive = dialogs/messages/send tools, sources_ro = auto-discovered read-only source tools"
+            },
             "policyProfile": { "type": "string", "description": "Backend policy profile to use for this context" },
             "replyDelaySec": { "type": "number" },
             "replyDelayMaxSec": { "type": "number" },
@@ -85,5 +91,6 @@
     "replyDelaySec": { "label": "Reply delay (sec)" },
     "replyDelayMaxSec": { "label": "Reply delay max (sec)" }
   },
+  "channels": ["telegram-user-bridge"],
   "skills": ["./skills/telegram-user"]
 }
