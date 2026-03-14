@@ -1177,15 +1177,23 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
         isSourcesReadOnly
           ? `Get recent messages from an auto-discovered read-only Telegram source using the "${profileLabel}" context. ` +
             "Use this in scheduled polling jobs. Prefer min_id to fetch only new messages and save tokens. " +
+            "Use since_unix for strict time windows such as the last 24 hours. " +
             "For forum threads, pass topic_id from list_topics or from earlier message metadata."
           : `Get recent messages from a Telegram chat using the "${profileLabel}" context. ` +
             "Use when the user explicitly asks to read Telegram messages or when a scheduled workflow polls new messages. " +
             "Use min_id to fetch only newer messages and reduce token usage. " +
+            "Use since_unix for strict time windows such as the last 24 hours. " +
             "For forum threads, pass topic_id from list_topics or from earlier message metadata.",
       parameters: Type.Object({
         peer: Type.Union([Type.String(), Type.Number()], { description: "Username, chat id, or 'me'" }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 20 })),
         min_id: Type.Optional(Type.Number({ minimum: 1, description: "Only return messages newer than this id" })),
+        since_unix: Type.Optional(
+          Type.Number({
+            minimum: 1,
+            description: "Only return messages with Unix timestamp >= this value; use for exact time windows",
+          })
+        ),
         topic_id: Type.Optional(
           Type.Number({
             minimum: 1,
@@ -1195,13 +1203,19 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
       }),
       async execute(
         _id: string,
-        params: { peer: string | number; limit?: number; min_id?: number; topic_id?: number }
+        params: { peer: string | number; limit?: number; min_id?: number; since_unix?: number; topic_id?: number }
       ) {
         const limit = Math.min(50, Math.max(1, params.limit ?? 20));
         const peer = encodeURIComponent(String(params.peer));
         const minId = typeof params.min_id === "number" ? `&min_id=${Math.max(1, params.min_id)}` : "";
+        const sinceUnix =
+          typeof params.since_unix === "number" ? `&since_unix=${Math.max(1, Math.floor(params.since_unix))}` : "";
         const topicId = typeof params.topic_id === "number" ? `&topic_id=${Math.max(1, params.topic_id)}` : "";
-        const res = await fetchBridge(api, profile, `/messages?peer=${peer}&limit=${limit}${minId}${topicId}`);
+        const res = await fetchBridge(
+          api,
+          profile,
+          `/messages?peer=${peer}&limit=${limit}${minId}${sinceUnix}${topicId}`
+        );
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }

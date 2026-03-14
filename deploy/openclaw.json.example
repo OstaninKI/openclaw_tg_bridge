@@ -20,10 +20,10 @@
               "policyProfile": "owner_dm"
             },
             {
-              "id": "wife_dm",
-              "label": "Wife DM",
+              "id": "trusted_dm",
+              "label": "Trusted DM",
               "mode": "interactive",
-              "policyProfile": "wife_dm"
+              "policyProfile": "trusted_dm"
             },
             {
               "id": "sources_ro",
@@ -64,7 +64,7 @@
       }
     },
     {
-      "agentId": "wife-agent",
+      "agentId": "trusted-agent",
       "match": {
         "channel": "telegram-user-bridge",
         "accountId": "default",
@@ -90,13 +90,13 @@
         }
       },
       {
-        "id": "wife-agent",
+        "id": "trusted-agent",
         "tools": {
           "allow": [
-            "telegram_wife_dm_get_dialogs",
-            "telegram_wife_dm_list_topics",
-            "telegram_wife_dm_get_messages",
-            "telegram_wife_dm_send_message",
+            "telegram_trusted_dm_get_dialogs",
+            "telegram_trusted_dm_list_topics",
+            "telegram_trusted_dm_get_messages",
+            "telegram_trusted_dm_send_message",
             "telegram_sources_ro_list_sources",
             "telegram_sources_ro_sync_sources",
             "telegram_sources_ro_list_topics",

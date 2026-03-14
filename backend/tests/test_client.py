@@ -1,6 +1,7 @@
 """Unit tests for bridge client logic without real Telethon."""
 
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -327,6 +328,82 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
                 "hash": 0,
             }
         )
+
+    async def test_get_messages_filters_by_since_unix_and_paginates(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        self.mock_tg.get_entity.return_value = entity
+        since_unix = int(datetime(2026, 3, 14, 9, 0, tzinfo=timezone.utc).timestamp())
+        self.mock_tg.get_messages.side_effect = [
+            [
+                SimpleNamespace(id=105, text="newest", date=datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc), out=False, sender_id=7),
+                SimpleNamespace(id=104, text="still fresh", date=datetime(2026, 3, 14, 11, 30, tzinfo=timezone.utc), out=False, sender_id=7),
+            ],
+            [
+                SimpleNamespace(id=103, text="inside window", date=datetime(2026, 3, 14, 10, 0, tzinfo=timezone.utc), out=False, sender_id=7),
+                SimpleNamespace(id=102, text="too old", date=datetime(2026, 3, 13, 8, 0, tzinfo=timezone.utc), out=False, sender_id=7),
+            ],
+        ]
+
+        messages = await bridge.get_messages("42", limit=5, since_unix=since_unix)
+
+        self.assertEqual([message["id"] for message in messages], [103, 104, 105])
+        self.assertEqual(self.mock_tg.get_messages.await_args_list[0].kwargs, {"limit": 5})
+        self.assertEqual(self.mock_tg.get_messages.await_args_list[1].kwargs, {"limit": 3, "offset_id": 104})
+
+    async def test_get_topic_messages_filters_by_since_unix(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="forumchat", forum=True)
+        self.mock_tg.get_entity.return_value = entity
+        since_unix = int(datetime(2026, 3, 14, 9, 0, tzinfo=timezone.utc).timestamp())
+        self.mock_tg.__call__.side_effect = [
+            SimpleNamespace(
+                messages=[
+                    SimpleNamespace(
+                        id=205,
+                        text="fresh",
+                        date=datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc),
+                        out=False,
+                        from_id=SimpleNamespace(user_id=7),
+                    ),
+                    SimpleNamespace(
+                        id=204,
+                        text="older but still inside",
+                        date=datetime(2026, 3, 14, 10, 0, tzinfo=timezone.utc),
+                        out=False,
+                        from_id=SimpleNamespace(user_id=7),
+                    ),
+                ],
+                users=[SimpleNamespace(id=7, first_name="Alice", last_name=None, username="alice")],
+                chats=[],
+            ),
+            SimpleNamespace(
+                messages=[
+                    SimpleNamespace(
+                        id=203,
+                        text="too old",
+                        date=datetime(2026, 3, 13, 8, 0, tzinfo=timezone.utc),
+                        out=False,
+                        from_id=SimpleNamespace(user_id=7),
+                    ),
+                ],
+                users=[SimpleNamespace(id=7, first_name="Alice", last_name=None, username="alice")],
+                chats=[],
+            ),
+        ]
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(
+                GetRepliesRequest=lambda **kwargs: {"kind": "replies", **kwargs},
+            )
+        )
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            messages = await bridge.get_messages("42", limit=5, topic_id=900, since_unix=since_unix)
+
+        self.assertEqual([message["id"] for message in messages], [204, 205])
+        self.assertEqual(messages[0]["topic_id"], 900)
+        self.assertEqual(self.mock_tg.__call__.await_args_list[0].args[0]["offset_id"], 0)
+        self.assertEqual(self.mock_tg.__call__.await_args_list[1].args[0]["offset_id"], 204)
 
     async def test_discover_source_dialogs_returns_serializable_inventory_entries(self) -> None:
         bridge = self.create_bridge()

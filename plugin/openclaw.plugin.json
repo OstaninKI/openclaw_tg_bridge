@@ -62,7 +62,7 @@
           "additionalProperties": false,
           "required": ["id"],
           "properties": {
-            "id": { "type": "string", "description": "Stable tool/profile id, for example owner, wife, shared" },
+            "id": { "type": "string", "description": "Stable tool/profile id, for example owner_dm, trusted_dm, sources_ro" },
             "label": { "type": "string", "description": "Human-readable label used in tool descriptions" },
             "enabled": { "type": "boolean", "default": true },
             "mode": {

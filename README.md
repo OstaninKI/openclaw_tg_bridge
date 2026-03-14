@@ -6,7 +6,7 @@ This repository is designed for a setup like this:
 
 - one real Telegram account that represents OpenClaw;
 - one isolated DM context for you: `owner_dm`;
-- one isolated DM context for your wife: `wife_dm`;
+- one isolated DM context for one additional trusted sender: `trusted_dm`;
 - one scheduler-only, read-only context for groups/channels/forums: `sources_ro`;
 - **writes denied by default** until you explicitly allow them;
 - automatic discovery of new source chats for `sources_ro`, so joining a new channel/group does not require manual config edits.
@@ -35,6 +35,7 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - longer waits return `429` with `Retry-After`;
   - no hidden long sleeps after the OpenClaw-side timeout.
 - `get_messages(min_id=...)` for incremental polling and token savings.
+- `get_messages(since_unix=...)` for strict recent time windows such as the last 24 hours.
 - Topic-aware forum helpers:
   - `list_topics(peer)` for Telegram forum chats
   - `get_messages(peer, topic_id=...)` for one specific forum thread
@@ -75,7 +76,7 @@ For inbound DMs, the critical OpenClaw setting is:
 }
 ```
 
-This is the recommended secure DM mode in OpenClaw for multi-user inboxes. It keeps separate session keys per channel + sender, so your DM history and your wife's DM history do not mix even though both write to the same Telegram account.
+This is the recommended secure DM mode in OpenClaw for multi-user inboxes. It keeps separate session keys per channel + sender, so your DM history and each additional trusted sender's DM history do not mix even though all of them write to the same Telegram account.
 
 To make routing deterministic as well, add exact OpenClaw `bindings` by Telegram `sender_id`. The plugin now refuses fallback inbound DM routing by default. In strict mode it validates `allowFrom`, `writeTo`, and exact peer `bindings` at channel startup and refuses to start if they diverge.
 
@@ -150,7 +151,7 @@ Example `policy.json`:
         "allow": ["123456789"]
       }
     },
-    "wife_dm": {
+    "trusted_dm": {
       "read": {
         "allow": ["987654321"]
       },
@@ -210,10 +211,10 @@ Recommended plugin config:
               "policyProfile": "owner_dm"
             },
             {
-              "id": "wife_dm",
-              "label": "Wife DM",
+              "id": "trusted_dm",
+              "label": "Trusted DM",
               "mode": "interactive",
-              "policyProfile": "wife_dm"
+              "policyProfile": "trusted_dm"
             },
             {
               "id": "sources_ro",
@@ -232,13 +233,16 @@ Recommended plugin config:
 This will register tools like:
 
 - `telegram_owner_dm_get_dialogs`
+- `telegram_owner_dm_list_topics`
 - `telegram_owner_dm_get_messages`
 - `telegram_owner_dm_send_message`
-- `telegram_wife_dm_get_dialogs`
-- `telegram_wife_dm_get_messages`
-- `telegram_wife_dm_send_message`
+- `telegram_trusted_dm_get_dialogs`
+- `telegram_trusted_dm_list_topics`
+- `telegram_trusted_dm_get_messages`
+- `telegram_trusted_dm_send_message`
 - `telegram_sources_ro_list_sources`
 - `telegram_sources_ro_sync_sources`
+- `telegram_sources_ro_list_topics`
 - `telegram_sources_ro_get_messages`
 
 ### 6. Configure the inbound DM channel
@@ -285,7 +289,7 @@ Add exact DM bindings for each allowed sender:
       }
     },
     {
-      "agentId": "wife-agent",
+      "agentId": "trusted-agent",
       "match": {
         "channel": "telegram-user-bridge",
         "accountId": "default",
@@ -346,13 +350,13 @@ Give each OpenClaw agent only its own tools:
         }
       },
       {
-        "id": "wife-agent",
+        "id": "trusted-agent",
         "tools": {
           "allow": [
-            "telegram_wife_dm_get_dialogs",
-            "telegram_wife_dm_list_topics",
-            "telegram_wife_dm_get_messages",
-            "telegram_wife_dm_send_message",
+            "telegram_trusted_dm_get_dialogs",
+            "telegram_trusted_dm_list_topics",
+            "telegram_trusted_dm_get_messages",
+            "telegram_trusted_dm_send_message",
             "telegram_sources_ro_list_sources",
             "telegram_sources_ro_sync_sources",
             "telegram_sources_ro_list_topics",
@@ -367,6 +371,138 @@ Give each OpenClaw agent only its own tools:
 
 This is the main separation mechanism. One agent should never get the other agent's DM tool set.
 
+If you want more than one additional trusted DM sender, do not reuse one shared `trusted_dm`. Create separate profiles and agents such as:
+
+- `trusted_alice_dm`
+- `trusted_bob_dm`
+- `trusted_parent_dm`
+
+For each additional sender, add:
+
+- a dedicated backend policy profile;
+- a dedicated plugin profile;
+- one exact DM `binding` by Telegram `sender_id`;
+- one OpenClaw agent with only that profile's tools;
+- the sender id in the shared channel account `allowFrom` and `writeTo`.
+
+The channel implementation already supports this model. You do not need extra bridge instances or extra Telegram sessions.
+
+### Copy-paste pattern for more trusted DM users
+
+If you want OpenClaw to add more trusted DM users itself, use one dedicated `trusted_<alias>_dm` profile per person and leave the existing owner baseline untouched unless you explicitly ask to change it.
+
+Example for adding two more trusted senders:
+
+`policy.json`
+
+```json
+{
+  "profiles": {
+    "trusted_alice_dm": {
+      "read": { "allow": ["555111222"] },
+      "write": { "allow": ["555111222"] }
+    },
+    "trusted_bob_dm": {
+      "read": { "allow": ["555333444"] },
+      "write": { "allow": ["555333444"] }
+    }
+  }
+}
+```
+
+`plugins.entries.telegram-user-bridge.config.profiles`
+
+```json
+[
+  {
+    "id": "trusted_alice_dm",
+    "label": "Trusted Alice DM",
+    "mode": "interactive",
+    "policyProfile": "trusted_alice_dm"
+  },
+  {
+    "id": "trusted_bob_dm",
+    "label": "Trusted Bob DM",
+    "mode": "interactive",
+    "policyProfile": "trusted_bob_dm"
+  }
+]
+```
+
+`channels.telegram-user-bridge.accounts.default`
+
+```json
+{
+  "allowFrom": ["123456789", "987654321", "555111222", "555333444"],
+  "writeTo": ["123456789", "987654321", "555111222", "555333444"]
+}
+```
+
+`bindings`
+
+```json
+[
+  {
+    "agentId": "trusted-alice-agent",
+    "match": {
+      "channel": "telegram-user-bridge",
+      "accountId": "default",
+      "peer": { "kind": "direct", "id": "555111222" }
+    }
+  },
+  {
+    "agentId": "trusted-bob-agent",
+    "match": {
+      "channel": "telegram-user-bridge",
+      "accountId": "default",
+      "peer": { "kind": "direct", "id": "555333444" }
+    }
+  }
+]
+```
+
+`agents.list`
+
+```json
+[
+  {
+    "id": "trusted-alice-agent",
+    "tools": {
+      "allow": [
+        "telegram_trusted_alice_dm_get_dialogs",
+        "telegram_trusted_alice_dm_list_topics",
+        "telegram_trusted_alice_dm_get_messages",
+        "telegram_trusted_alice_dm_send_message",
+        "telegram_sources_ro_list_sources",
+        "telegram_sources_ro_sync_sources",
+        "telegram_sources_ro_list_topics",
+        "telegram_sources_ro_get_messages"
+      ]
+    }
+  },
+  {
+    "id": "trusted-bob-agent",
+    "tools": {
+      "allow": [
+        "telegram_trusted_bob_dm_get_dialogs",
+        "telegram_trusted_bob_dm_list_topics",
+        "telegram_trusted_bob_dm_get_messages",
+        "telegram_trusted_bob_dm_send_message",
+        "telegram_sources_ro_list_sources",
+        "telegram_sources_ro_sync_sources",
+        "telegram_sources_ro_list_topics",
+        "telegram_sources_ro_get_messages"
+      ]
+    }
+  }
+]
+```
+
+Operational rule for OpenClaw self-management:
+
+- it may add, update, or remove only `trusted*_dm` entries by default;
+- it must not rename, remove, or rebind the existing owner DM baseline unless you explicitly ask for that change.
+
 ## Scheduling and token economy
 
 For groups/channels/forums and periodic processing:
@@ -375,6 +511,9 @@ For groups/channels/forums and periodic processing:
 - keep checkpoints in OpenClaw, not in the bridge;
 - keep a checkpoint per `{profile, peer}`;
 - if forum topics matter, keep checkpoints per `{profile, peer, topic_id}`;
+- use `min_id` for "since the last run";
+- use `since_unix` for exact time windows such as "last 24 hours";
+- if both are set, the bridge applies both filters;
 - call `telegram_sources_ro_list_sources` or `telegram_sources_ro_sync_sources` before first use or after the Telegram account joins new sources;
 - for forum chats, call `telegram_sources_ro_list_topics(peer=...)` and use the returned `topic_id` as the thread fetch id;
 - call `telegram_sources_ro_get_messages` with a small `limit` and `min_id`;
@@ -396,6 +535,13 @@ Example forum-topic polling pattern:
 3. read stored `last_message_id` for `{sources_ro, -1003333333333, topic_id}`;
 4. call `telegram_sources_ro_get_messages(peer=-1003333333333, topic_id=900, min_id=last_message_id, limit=20)`;
 5. summarize only returned messages and update the OpenClaw checkpoint.
+
+Example strict "last 24 hours" pattern:
+
+1. compute `since_unix = now_unix - 86400`;
+2. call `telegram_sources_ro_get_messages(peer=-1003333333333, since_unix=since_unix, limit=20)`;
+3. summarize only returned messages;
+4. do not overwrite checkpoint-based state just because a time-window query was executed.
 
 Example forum-wide digest pattern:
 

@@ -82,7 +82,7 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   assert.match(result.content[0].text, /Message sent/);
 });
 
-test("plugin passes min_id and topic_id for incremental polling", async () => {
+test("plugin passes min_id, since_unix and topic_id for polling", async () => {
   const api = createApi({
     plugins: {
       entries: {
@@ -106,9 +106,12 @@ test("plugin passes min_id and topic_id for incremental polling", async () => {
   };
 
   const messagesTool = getTool(api, "telegram_shared_get_messages");
-  await messagesTool.execute("1", { peer: -1001, limit: 10, min_id: 77, topic_id: 900 });
+  await messagesTool.execute("1", { peer: -1001, limit: 10, min_id: 77, since_unix: 1710000000, topic_id: 900 });
 
-  assert.equal(capturedUrl, "http://127.0.0.1:8765/messages?peer=-1001&limit=10&min_id=77&topic_id=900");
+  assert.equal(
+    capturedUrl,
+    "http://127.0.0.1:8765/messages?peer=-1001&limit=10&min_id=77&since_unix=1710000000&topic_id=900"
+  );
 });
 
 test("sources_ro profile is read-only and exposes source inventory tools", async () => {
@@ -426,7 +429,7 @@ test("strict DM binding resolves exact sender to agent", () => {
           },
         },
         {
-          agentId: "wife-agent",
+          agentId: "trusted-agent",
           match: {
             channel: "telegram-user-bridge",
             accountId: "default",
@@ -516,7 +519,7 @@ test("strict DM channel startup fails fast when allowFrom and bindings diverge",
     },
     bindings: [
       {
-        agentId: "wife-agent",
+        agentId: "trusted-agent",
         match: {
           channel: "telegram-user-bridge",
           accountId: "default",

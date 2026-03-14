@@ -148,6 +148,12 @@ def _isoformat(value: Any) -> str | None:
     return str(value)
 
 
+def _datetime_unix(value: Any) -> int | None:
+    if isinstance(value, datetime):
+        return int(value.timestamp())
+    return None
+
+
 def _message_topic_id(message: Any) -> int | None:
     for attr in ("reply_to_top_id", "topic_id", "top_msg_id"):
         value = getattr(message, attr, None)
@@ -245,7 +251,7 @@ def _serialize_message(
         "id": getattr(message, "id", None),
         "text": getattr(message, "text", None) or "",
         "date": _isoformat(date_value),
-        "date_unix": int(date_value.timestamp()) if isinstance(date_value, datetime) else 0,
+        "date_unix": _datetime_unix(date_value) or 0,
         "out": getattr(message, "out", None),
         "sender_id": sender_id,
         "sender_name": _message_sender_name(message, sender=sender),
@@ -752,6 +758,7 @@ class BridgeClient:
         limit: int = 20,
         min_id: int | None = None,
         topic_id: int | None = None,
+        since_unix: int | None = None,
         *,
         policy_overrides: dict[str, object] | None = None,
     ) -> list[dict[str, Any]]:
@@ -764,6 +771,22 @@ class BridgeClient:
             peer=peer,
             action="reading",
         )
+        if since_unix is not None and since_unix < 1:
+            raise BridgeValidationError("since_unix must be >= 1.")
+
+        def _filter_batch_since(batch: list[Any]) -> tuple[list[Any], bool]:
+            accepted: list[Any] = []
+            hit_older_boundary = False
+            for message in batch:
+                if message is None or getattr(message, "id", None) is None:
+                    continue
+                if since_unix is not None:
+                    message_unix = _datetime_unix(getattr(message, "date", None))
+                    if message_unix is not None and message_unix < since_unix:
+                        hit_older_boundary = True
+                        break
+                accepted.append(message)
+            return accepted, hit_older_boundary
 
         if topic_id is not None:
             if topic_id < 1:
@@ -771,39 +794,121 @@ class BridgeClient:
             if not getattr(entity, "forum", False):
                 raise BridgeValidationError("Telegram peer does not support forum topics.")
             functions = _telethon_functions()
-            request = functions.messages.GetRepliesRequest(
-                peer=entity,
-                msg_id=topic_id,
-                offset_id=0,
-                offset_date=None,
-                add_offset=0,
-                limit=min(max(1, limit), 50),
-                max_id=0,
-                min_id=max(0, min_id or 0),
-                hash=0,
-            )
-            result = await self._call_telegram(
-                self._client.__call__,
-                request,
-                action="read topic messages",
-            )
+            if since_unix is None:
+                request = functions.messages.GetRepliesRequest(
+                    peer=entity,
+                    msg_id=topic_id,
+                    offset_id=0,
+                    offset_date=None,
+                    add_offset=0,
+                    limit=min(max(1, limit), 50),
+                    max_id=0,
+                    min_id=max(0, min_id or 0),
+                    hash=0,
+                )
+                result = await self._call_telegram(
+                    self._client.__call__,
+                    request,
+                    action="read topic messages",
+                )
+                return _serialize_messages(
+                    getattr(result, "messages", []) or [],
+                    entity=entity,
+                    sender_lookup=_build_sender_lookup(result),
+                    topic_id_override=topic_id,
+                )
+
+            collected: list[Any] = []
+            sender_lookup: dict[str, Any] = {}
+            offset_id = 0
+            max_messages = min(max(1, limit), 50)
+            while len(collected) < max_messages:
+                request = functions.messages.GetRepliesRequest(
+                    peer=entity,
+                    msg_id=topic_id,
+                    offset_id=offset_id,
+                    offset_date=None,
+                    add_offset=0,
+                    limit=max_messages - len(collected),
+                    max_id=0,
+                    min_id=max(0, min_id or 0),
+                    hash=0,
+                )
+                result = await self._call_telegram(
+                    self._client.__call__,
+                    request,
+                    action="read topic messages",
+                )
+                sender_lookup.update(_build_sender_lookup(result))
+                batch = [message for message in (getattr(result, "messages", []) or []) if message is not None]
+                if not batch:
+                    break
+                accepted, hit_older_boundary = _filter_batch_since(batch)
+                collected.extend(accepted)
+                oldest_id = min(
+                    (
+                        int(message_id)
+                        for message in batch
+                        if isinstance((message_id := getattr(message, "id", None)), int)
+                    ),
+                    default=0,
+                )
+                if hit_older_boundary or len(collected) >= max_messages or oldest_id <= 0 or oldest_id == offset_id:
+                    break
+                offset_id = oldest_id
             return _serialize_messages(
-                getattr(result, "messages", []) or [],
+                collected,
                 entity=entity,
-                sender_lookup=_build_sender_lookup(result),
+                sender_lookup=sender_lookup,
                 topic_id_override=topic_id,
             )
 
-        kwargs: dict[str, Any] = {"limit": min(max(1, limit), 50)}
-        if min_id is not None:
-            kwargs["min_id"] = min_id
-        messages = await self._call_telegram(
-            self._client.get_messages,
-            entity,
-            action="read messages",
-            **kwargs,
-        )
-        return _serialize_messages(messages, entity=entity)
+        max_messages = min(max(1, limit), 50)
+        if since_unix is None:
+            kwargs: dict[str, Any] = {"limit": max_messages}
+            if min_id is not None:
+                kwargs["min_id"] = min_id
+            messages = await self._call_telegram(
+                self._client.get_messages,
+                entity,
+                action="read messages",
+                **kwargs,
+            )
+            return _serialize_messages(messages, entity=entity)
+
+        collected: list[Any] = []
+        offset_id = 0
+        while len(collected) < max_messages:
+            kwargs = {
+                "limit": max_messages - len(collected),
+            }
+            if min_id is not None:
+                kwargs["min_id"] = min_id
+            if offset_id > 0:
+                kwargs["offset_id"] = offset_id
+            messages = await self._call_telegram(
+                self._client.get_messages,
+                entity,
+                action="read messages",
+                **kwargs,
+            )
+            batch = [message for message in list(messages) if message is not None]
+            if not batch:
+                break
+            accepted, hit_older_boundary = _filter_batch_since(batch)
+            collected.extend(accepted)
+            oldest_id = min(
+                (
+                    int(message_id)
+                    for message in batch
+                    if isinstance((message_id := getattr(message, "id", None)), int)
+                ),
+                default=0,
+            )
+            if hit_older_boundary or len(collected) >= max_messages or oldest_id <= 0 or oldest_id == offset_id:
+                break
+            offset_id = oldest_id
+        return _serialize_messages(collected, entity=entity)
 
     async def disconnect(self) -> None:
         if await self._is_connected():

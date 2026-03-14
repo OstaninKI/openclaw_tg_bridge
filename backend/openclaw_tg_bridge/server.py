@@ -559,6 +559,7 @@ async def messages(
     limit: int = 20,
     min_id: int | None = None,
     topic_id: int | None = None,
+    since_unix: int | None = None,
 ):
     bridge = get_bridge()
     try:
@@ -568,6 +569,7 @@ async def messages(
             limit=min(max(1, limit), 50),
             min_id=min_id,
             topic_id=topic_id,
+            since_unix=since_unix,
             policy_overrides=overrides,
         )
         return {"messages": data}
