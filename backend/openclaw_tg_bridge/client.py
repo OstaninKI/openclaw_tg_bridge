@@ -6,6 +6,7 @@ import logging
 import random
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
 from openclaw_tg_bridge.state import dialog_to_inventory_entry
@@ -140,6 +141,12 @@ def _telethon_functions() -> Any:
     return functions
 
 
+def _telethon_types() -> Any:
+    from telethon import types
+
+    return types
+
+
 def _isoformat(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -191,6 +198,60 @@ def _message_sender_name(message: Any, *, sender: Any | None = None) -> str | No
     if isinstance(post_author, str) and post_author.strip():
         return post_author.strip()
     return None
+
+
+def _serialize_message_entities(message: Any) -> list[dict[str, Any]]:
+    entities: list[dict[str, Any]] = []
+    text = getattr(message, "text", None) or getattr(message, "message", None) or ""
+    for entity in getattr(message, "entities", None) or []:
+        item = {
+            "type": type(entity).__name__,
+            "offset": getattr(entity, "offset", None),
+            "length": getattr(entity, "length", None),
+            "text": "",
+        }
+        offset = item["offset"]
+        length = item["length"]
+        if isinstance(offset, int) and isinstance(length, int) and length > 0:
+            item["text"] = text[offset : offset + length]
+        if getattr(entity, "url", None):
+            item["url"] = getattr(entity, "url", None)
+        user_id = _extract_peer_id(getattr(entity, "user_id", None))
+        if user_id is not None:
+            item["user_id"] = user_id
+        entities.append(item)
+    return entities
+
+
+def _extract_media_summary(message: Any) -> dict[str, Any]:
+    media = getattr(message, "media", None)
+    file = getattr(message, "file", None)
+    summary: dict[str, Any] = {
+        "has_media": bool(media),
+        "media_type": type(media).__name__ if media is not None else None,
+        "mime_type": getattr(file, "mime_type", None),
+        "file_size": getattr(file, "size", None),
+        "file_name": getattr(file, "name", None),
+    }
+    return summary
+
+
+def _extract_geo_summary(message: Any) -> dict[str, Any]:
+    media = getattr(message, "media", None)
+    geo = getattr(media, "geo", None) or getattr(message, "geo", None)
+    point = getattr(media, "geo", None)
+    result: dict[str, Any] = {
+        "latitude": getattr(geo, "lat", None),
+        "longitude": getattr(geo, "long", None),
+        "venue_title": getattr(media, "title", None),
+        "venue_address": getattr(media, "address", None),
+        "venue_provider": getattr(media, "provider", None),
+        "venue_id": getattr(media, "venue_id", None),
+    }
+    if point is None and getattr(message, "geo", None) is None:
+        result["latitude"] = None
+        result["longitude"] = None
+    return result
 
 
 def _resolve_chat_type(entity: Any | None) -> str:
@@ -247,7 +308,7 @@ def _serialize_message(
     if not isinstance(sender_id, int):
         sender_id = _extract_peer_id(getattr(message, "from_id", None))
     topic_id = topic_id_override if isinstance(topic_id_override, int) and topic_id_override > 0 else _message_topic_id(message)
-    return {
+    payload = {
         "id": getattr(message, "id", None),
         "text": getattr(message, "text", None) or "",
         "date": _isoformat(date_value),
@@ -262,7 +323,14 @@ def _serialize_message(
         "chat_type": _resolve_chat_type(chat_entity),
         "topic_id": topic_id,
         "reply_to_message_id": getattr(message, "reply_to_msg_id", None),
+        "grouped_id": getattr(message, "grouped_id", None),
     }
+    payload.update(_extract_media_summary(message))
+    payload.update(_extract_geo_summary(message))
+    entities = _serialize_message_entities(message)
+    if entities:
+        payload["entities"] = entities
+    return payload
 
 
 def _serialize_messages(
@@ -420,6 +488,10 @@ def _build_candidate_keys(
     return keys
 
 
+def _can_write_self(scope: BridgeScope) -> bool:
+    return scope.allow_all or "me" in scope.allow
+
+
 def _extract_flood_wait_seconds(exc: BaseException) -> int | None:
     seconds = getattr(exc, "seconds", None)
     if isinstance(seconds, int):
@@ -574,6 +646,23 @@ class BridgeClient:
         if not _scope_matches(candidate_keys, scope):
             raise BridgeForbiddenError(f"{action.capitalize()} is not allowed for peer: {peer}")
 
+    async def _resolve_scoped_entity(
+        self,
+        peer: str | int,
+        *,
+        action: str,
+        scope: BridgeScope,
+    ) -> tuple[Any, set[str]]:
+        entity = await self._resolve_entity(peer, action=action)
+        candidate_keys = _build_candidate_keys(peer=peer, entity=entity)
+        self._check_scope(scope=scope, candidate_keys=candidate_keys, peer=peer, action=action)
+        return entity, candidate_keys
+
+    async def _delay_before_write(self, policy: BridgePolicy) -> None:
+        await asyncio.sleep(self._get_delay(policy))
+        if not await self.ensure_connected():
+            raise BridgeUnavailableError("Telegram bridge is not connected.")
+
     async def send_message(
         self,
         peer: str | int,
@@ -590,18 +679,12 @@ class BridgeClient:
             raise BridgeValidationError(f"Message too long (max {MAX_MESSAGE_LENGTH} characters)")
 
         async with self._send_lock:
-            entity = await self._resolve_entity(peer, action="send a message")
-            candidate_keys = _build_candidate_keys(peer=peer, entity=entity)
-            self._check_scope(
-                scope=policy.write_scope,
-                candidate_keys=candidate_keys,
-                peer=peer,
+            entity, _ = await self._resolve_scoped_entity(
+                peer,
                 action="writing",
+                scope=policy.write_scope,
             )
-
-            await asyncio.sleep(self._get_delay(policy))
-            if not await self.ensure_connected():
-                raise BridgeUnavailableError("Telegram bridge is not connected.")
+            await self._delay_before_write(policy)
 
             result = await self._call_telegram(
                 self._client.send_message,
@@ -612,6 +695,245 @@ class BridgeClient:
                 allow_flood_retry=True,
             )
             return {"ok": True, "message_id": getattr(result, "id", None)}
+
+    async def send_file(
+        self,
+        peer: str | int,
+        file_path: str,
+        *,
+        caption: str | None = None,
+        reply_to: int | None = None,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        file_path = str(file_path or "").strip()
+        if not file_path:
+            raise BridgeValidationError("file_path is required.")
+        if not Path(file_path).exists():
+            raise BridgeValidationError("File does not exist on the backend host.")
+        async with self._send_lock:
+            entity, _ = await self._resolve_scoped_entity(
+                peer,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            await self._delay_before_write(policy)
+            result = await self._call_telegram(
+                self._client.send_file,
+                entity,
+                file_path,
+                caption=caption,
+                reply_to=reply_to,
+                action="send a file",
+                allow_flood_retry=True,
+            )
+            return {"ok": True, "message_id": getattr(result, "id", None)}
+
+    async def send_voice(
+        self,
+        peer: str | int,
+        file_path: str,
+        *,
+        caption: str | None = None,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        file_path = str(file_path or "").strip()
+        if not file_path:
+            raise BridgeValidationError("file_path is required.")
+        if not Path(file_path).exists():
+            raise BridgeValidationError("File does not exist on the backend host.")
+        async with self._send_lock:
+            entity, _ = await self._resolve_scoped_entity(
+                peer,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            await self._delay_before_write(policy)
+            result = await self._call_telegram(
+                self._client.send_file,
+                entity,
+                file_path,
+                caption=caption,
+                voice_note=True,
+                action="send a voice note",
+                allow_flood_retry=True,
+            )
+            return {"ok": True, "message_id": getattr(result, "id", None)}
+
+    async def send_sticker(
+        self,
+        peer: str | int,
+        file_path: str,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        file_path = str(file_path or "").strip()
+        if not file_path:
+            raise BridgeValidationError("file_path is required.")
+        if not Path(file_path).exists():
+            raise BridgeValidationError("File does not exist on the backend host.")
+        async with self._send_lock:
+            entity, _ = await self._resolve_scoped_entity(
+                peer,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            await self._delay_before_write(policy)
+            result = await self._call_telegram(
+                self._client.send_file,
+                entity,
+                file_path,
+                force_document=False,
+                action="send a sticker",
+                allow_flood_retry=True,
+            )
+            return {"ok": True, "message_id": getattr(result, "id", None)}
+
+    async def send_location(
+        self,
+        peer: str | int,
+        *,
+        latitude: float,
+        longitude: float,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        if not (-90.0 <= latitude <= 90.0):
+            raise BridgeValidationError("latitude must be between -90 and 90.")
+        if not (-180.0 <= longitude <= 180.0):
+            raise BridgeValidationError("longitude must be between -180 and 180.")
+        policy = self._resolve_policy(policy_overrides)
+        types = _telethon_types()
+        functions = _telethon_functions()
+        async with self._send_lock:
+            entity, _ = await self._resolve_scoped_entity(
+                peer,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            await self._delay_before_write(policy)
+            request = functions.messages.SendMediaRequest(
+                peer=entity,
+                media=types.InputMediaGeoPoint(
+                    geo_point=types.InputGeoPoint(
+                        lat=latitude,
+                        long=longitude,
+                        accuracy_radius=None,
+                    )
+                ),
+                message="",
+                random_id=random.getrandbits(63),
+            )
+            result = await self._call_telegram(
+                self._client.__call__,
+                request,
+                action="send a location",
+                allow_flood_retry=True,
+            )
+            updates = getattr(result, "updates", None) or []
+            message_id = None
+            for update in updates:
+                value = getattr(update, "id", None) or getattr(getattr(update, "message", None), "id", None)
+                if isinstance(value, int):
+                    message_id = value
+                    break
+            return {"ok": True, "message_id": message_id}
+
+    async def edit_message(
+        self,
+        peer: str | int,
+        message_id: int,
+        text: str,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        text = (text or "").strip()
+        if message_id < 1:
+            raise BridgeValidationError("message_id must be >= 1.")
+        if not text:
+            raise BridgeValidationError("Message text is empty")
+        async with self._send_lock:
+            entity, _ = await self._resolve_scoped_entity(
+                peer,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            await self._delay_before_write(policy)
+            await self._call_telegram(
+                self._client.edit_message,
+                entity,
+                message_id,
+                text,
+                action="edit a message",
+                allow_flood_retry=True,
+            )
+            return {"ok": True, "message_id": message_id}
+
+    async def delete_message(
+        self,
+        peer: str | int,
+        message_id: int,
+        *,
+        revoke: bool = True,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        if message_id < 1:
+            raise BridgeValidationError("message_id must be >= 1.")
+        async with self._send_lock:
+            entity, _ = await self._resolve_scoped_entity(
+                peer,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            await self._delay_before_write(policy)
+            await self._call_telegram(
+                self._client.delete_messages,
+                entity,
+                message_id,
+                revoke=revoke,
+                action="delete a message",
+            )
+            return {"ok": True, "message_id": message_id}
+
+    async def forward_message(
+        self,
+        from_peer: str | int,
+        to_peer: str | int,
+        message_id: int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        if message_id < 1:
+            raise BridgeValidationError("message_id must be >= 1.")
+        from_entity, _ = await self._resolve_scoped_entity(
+            from_peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        async with self._send_lock:
+            to_entity, _ = await self._resolve_scoped_entity(
+                to_peer,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            await self._delay_before_write(policy)
+            result = await self._call_telegram(
+                self._client.forward_messages,
+                to_entity,
+                message_id,
+                from_entity,
+                action="forward a message",
+                allow_flood_retry=True,
+            )
+            if isinstance(result, list) and result:
+                forwarded = result[0]
+            else:
+                forwarded = result
+            return {"ok": True, "message_id": getattr(forwarded, "id", None)}
 
     async def get_me(self) -> dict[str, Any]:
         if not await self.ensure_connected():
@@ -625,6 +947,1047 @@ class BridgeClient:
             "first_name": getattr(me, "first_name", None),
             "last_name": getattr(me, "last_name", None),
         }
+
+    async def get_message(
+        self,
+        peer: str | int,
+        message_id: int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        if message_id < 1:
+            raise BridgeValidationError("message_id must be >= 1.")
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        message = await self._call_telegram(
+            self._client.get_messages,
+            entity,
+            ids=message_id,
+            action="read one message",
+        )
+        if message is None:
+            raise BridgeValidationError("Message not found.")
+        return _serialize_message(message, entity=entity)
+
+    async def download_media(
+        self,
+        peer: str | int,
+        message_id: int,
+        *,
+        output_path: str | None = None,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        message = await self.get_message(peer, message_id, policy_overrides=policy_overrides)
+        entity = await self._resolve_entity(peer, action="download media")
+        tg_message = await self._call_telegram(
+            self._client.get_messages,
+            entity,
+            ids=message_id,
+            action="download media",
+        )
+        if tg_message is None or getattr(tg_message, "media", None) is None:
+            raise BridgeValidationError("Message does not contain downloadable media.")
+        file_path = await self._call_telegram(
+            self._client.download_media,
+            tg_message,
+            file=output_path,
+            action="download media",
+        )
+        return {
+            "ok": True,
+            "path": file_path,
+            "message": message,
+        }
+
+    async def search_messages(
+        self,
+        peer: str | int,
+        query: str,
+        *,
+        limit: int = 20,
+        from_user: str | int | None = None,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        query = (query or "").strip()
+        if not query:
+            raise BridgeValidationError("query is required.")
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        from_entity = None
+        if from_user is not None:
+            from_entity = await self._resolve_entity(from_user, action="resolve search sender")
+        messages = await self._call_telegram(
+            self._client.get_messages,
+            entity,
+            limit=min(max(1, limit), 50),
+            search=query,
+            from_user=from_entity,
+            action="search messages",
+        )
+        return _serialize_messages(messages, entity=entity)
+
+    async def get_media_info(
+        self,
+        peer: str | int,
+        message_id: int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        message = await self.get_message(peer, message_id, policy_overrides=policy_overrides)
+        return {
+            "id": message.get("id"),
+            "has_media": message.get("has_media"),
+            "media_type": message.get("media_type"),
+            "mime_type": message.get("mime_type"),
+            "file_name": message.get("file_name"),
+            "file_size": message.get("file_size"),
+            "latitude": message.get("latitude"),
+            "longitude": message.get("longitude"),
+            "venue_title": message.get("venue_title"),
+            "venue_address": message.get("venue_address"),
+        }
+
+    async def list_contacts(
+        self,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        functions = _telethon_functions()
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.contacts.GetContactsRequest(hash=0),
+            action="list contacts",
+        )
+        contacts: list[dict[str, Any]] = []
+        for user in getattr(result, "users", []) or []:
+            keys = _build_candidate_keys(entity=user)
+            if not _scope_matches(keys, policy.read_scope):
+                continue
+            contacts.append(
+                {
+                    "id": getattr(user, "id", None),
+                    "username": getattr(user, "username", None),
+                    "title": _entity_display_name(user),
+                    "phone": getattr(user, "phone", None),
+                }
+            )
+        return contacts
+
+    async def search_contacts(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        query = (query or "").strip()
+        if not query:
+            raise BridgeValidationError("query is required.")
+        functions = _telethon_functions()
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.contacts.SearchRequest(q=query, limit=min(max(1, limit), 50)),
+            action="search contacts",
+        )
+        contacts: list[dict[str, Any]] = []
+        for user in getattr(result, "users", []) or []:
+            keys = _build_candidate_keys(entity=user)
+            if not _scope_matches(keys, policy.read_scope):
+                continue
+            contacts.append(
+                {
+                    "id": getattr(user, "id", None),
+                    "username": getattr(user, "username", None),
+                    "title": _entity_display_name(user),
+                    "phone": getattr(user, "phone", None),
+                }
+            )
+        return contacts
+
+    async def add_contact(
+        self,
+        phone: str,
+        first_name: str,
+        last_name: str | None = None,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        if not _can_write_self(policy.write_scope):
+            raise BridgeForbiddenError("Writing is not allowed for creating contacts.")
+        phone = phone.strip()
+        first_name = first_name.strip()
+        if not phone or not first_name:
+            raise BridgeValidationError("phone and first_name are required.")
+        functions = _telethon_functions()
+        types = _telethon_types()
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.contacts.ImportContactsRequest(
+                contacts=[
+                    types.InputPhoneContact(
+                        client_id=random.getrandbits(63),
+                        phone=phone,
+                        first_name=first_name,
+                        last_name=(last_name or "").strip(),
+                    )
+                ]
+            ),
+            action="add a contact",
+        )
+        user = (getattr(result, "users", None) or [None])[0]
+        return {
+            "ok": True,
+            "contact": {
+                "id": getattr(user, "id", None),
+                "username": getattr(user, "username", None),
+                "title": _entity_display_name(user),
+                "phone": getattr(user, "phone", None) if user is not None else phone,
+            },
+        }
+
+    async def delete_contact(
+        self,
+        user_peer: str | int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            user_peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        functions = _telethon_functions()
+        await self._call_telegram(
+            self._client.__call__,
+            functions.contacts.DeleteContactsRequest(id=[entity]),
+            action="delete a contact",
+        )
+        return {"ok": True}
+
+    async def block_user(
+        self,
+        user_peer: str | int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            user_peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        functions = _telethon_functions()
+        await self._call_telegram(
+            self._client.__call__,
+            functions.contacts.BlockRequest(id=entity),
+            action="block a user",
+        )
+        return {"ok": True}
+
+    async def unblock_user(
+        self,
+        user_peer: str | int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            user_peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        functions = _telethon_functions()
+        await self._call_telegram(
+            self._client.__call__,
+            functions.contacts.UnblockRequest(id=entity),
+            action="unblock a user",
+        )
+        return {"ok": True}
+
+    async def get_blocked_users(
+        self,
+        *,
+        limit: int = 100,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        functions = _telethon_functions()
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.contacts.GetBlockedRequest(offset=0, limit=min(max(1, limit), 200)),
+            action="list blocked users",
+        )
+        users = getattr(result, "users", []) or []
+        blocked: list[dict[str, Any]] = []
+        for user in users:
+            keys = _build_candidate_keys(entity=user)
+            if not _scope_matches(keys, policy.read_scope):
+                continue
+            blocked.append(
+                {
+                    "id": getattr(user, "id", None),
+                    "username": getattr(user, "username", None),
+                    "title": _entity_display_name(user),
+                }
+            )
+        return blocked
+
+    async def create_group(
+        self,
+        title: str,
+        users: list[str | int],
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        if not _can_write_self(policy.write_scope):
+            raise BridgeForbiddenError("Writing is not allowed for creating groups.")
+        title = title.strip()
+        if not title:
+            raise BridgeValidationError("title is required.")
+        user_entities: list[Any] = []
+        for user in users:
+            entity, _ = await self._resolve_scoped_entity(
+                user,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            user_entities.append(entity)
+        functions = _telethon_functions()
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.messages.CreateChatRequest(title=title, users=user_entities),
+            action="create a group",
+        )
+        chats = getattr(result, "chats", None) or []
+        chat = chats[0] if chats else None
+        return {"ok": True, "chat_id": getattr(chat, "id", None), "title": getattr(chat, "title", title)}
+
+    async def create_channel(
+        self,
+        title: str,
+        *,
+        about: str | None = None,
+        megagroup: bool = False,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        if not _can_write_self(policy.write_scope):
+            raise BridgeForbiddenError("Writing is not allowed for creating channels.")
+        title = title.strip()
+        if not title:
+            raise BridgeValidationError("title is required.")
+        functions = _telethon_functions()
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.channels.CreateChannelRequest(
+                title=title,
+                about=(about or "").strip(),
+                megagroup=megagroup,
+            ),
+            action="create a channel",
+        )
+        chats = getattr(result, "chats", None) or []
+        chat = chats[0] if chats else None
+        return {"ok": True, "chat_id": getattr(chat, "id", None), "title": getattr(chat, "title", title)}
+
+    async def invite_to_group(
+        self,
+        peer: str | int,
+        users: list[str | int],
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        user_entities: list[Any] = []
+        for user in users:
+            user_entity, _ = await self._resolve_scoped_entity(
+                user,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            user_entities.append(user_entity)
+        functions = _telethon_functions()
+        if getattr(entity, "broadcast", False) or getattr(entity, "megagroup", False):
+            await self._call_telegram(
+                self._client.__call__,
+                functions.channels.InviteToChannelRequest(channel=entity, users=user_entities),
+                action="invite users to a channel",
+            )
+        else:
+            for user in user_entities:
+                await self._call_telegram(
+                    self._client.__call__,
+                    functions.messages.AddChatUserRequest(
+                        chat_id=getattr(entity, "id", None),
+                        user_id=user,
+                        fwd_limit=50,
+                    ),
+                    action="invite users to a group",
+                )
+        return {"ok": True, "invited_count": len(user_entities)}
+
+    async def get_invite_link(
+        self,
+        peer: str | int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        functions = _telethon_functions()
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.messages.ExportChatInviteRequest(peer=entity),
+            action="get invite link",
+        )
+        return {"link": getattr(result, "link", None)}
+
+    async def join_chat_by_link(
+        self,
+        link: str,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        if not _can_write_self(policy.write_scope):
+            raise BridgeForbiddenError("Writing is not allowed for joining chats.")
+        link = link.strip()
+        if not link:
+            raise BridgeValidationError("link is required.")
+        invite_hash = link.rsplit("/", 1)[-1].lstrip("+")
+        functions = _telethon_functions()
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.messages.ImportChatInviteRequest(hash=invite_hash),
+            action="join a chat by invite link",
+        )
+        chats = getattr(result, "chats", None) or []
+        chat = chats[0] if chats else None
+        return {"ok": True, "chat_id": getattr(chat, "id", None), "title": getattr(chat, "title", None)}
+
+    async def resolve_username(self, username: str) -> dict[str, Any]:
+        entity = await self._resolve_entity(username, action="resolve username")
+        return {
+            "id": getattr(entity, "id", None),
+            "username": getattr(entity, "username", None),
+            "title": _entity_display_name(entity),
+            "type": _resolve_chat_type(entity),
+        }
+
+    async def get_user_status(self, peer: str | int) -> dict[str, Any]:
+        entity = await self._resolve_entity(peer, action="read user status")
+        status = getattr(entity, "status", None)
+        payload = {
+            "id": getattr(entity, "id", None),
+            "username": getattr(entity, "username", None),
+            "status_type": type(status).__name__ if status is not None else None,
+            "was_online": _isoformat(getattr(status, "was_online", None)),
+            "expires": _isoformat(getattr(status, "expires", None)),
+        }
+        return payload
+
+    async def get_participants(
+        self,
+        peer: str | int,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        participants = await self._call_telegram(
+            self._client.get_participants,
+            entity,
+            limit=min(max(1, limit), 200),
+            offset=max(0, offset),
+            action="list participants",
+        )
+        result: list[dict[str, Any]] = []
+        for participant in participants:
+            result.append(
+                {
+                    "id": getattr(participant, "id", None),
+                    "username": getattr(participant, "username", None),
+                    "title": _entity_display_name(participant),
+                    "bot": bool(getattr(participant, "bot", False)),
+                }
+            )
+        return result
+
+    async def get_admins(
+        self,
+        peer: str | int,
+        *,
+        limit: int = 100,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        types = _telethon_types()
+        admins = await self._call_telegram(
+            self._client.get_participants,
+            entity,
+            limit=min(max(1, limit), 200),
+            filter=types.ChannelParticipantsAdmins(),
+            action="list admins",
+        )
+        result: list[dict[str, Any]] = []
+        for admin in admins:
+            result.append(
+                {
+                    "id": getattr(admin, "id", None),
+                    "username": getattr(admin, "username", None),
+                    "title": _entity_display_name(admin),
+                    "bot": bool(getattr(admin, "bot", False)),
+                }
+            )
+        return result
+
+    async def get_banned_users(
+        self,
+        peer: str | int,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        types = _telethon_types()
+        users = await self._call_telegram(
+            self._client.get_participants,
+            entity,
+            limit=min(max(1, limit), 200),
+            offset=max(0, offset),
+            filter=types.ChannelParticipantsKicked(),
+            action="list banned users",
+        )
+        return [
+            {
+                "id": getattr(user, "id", None),
+                "username": getattr(user, "username", None),
+                "title": _entity_display_name(user),
+            }
+            for user in users
+        ]
+
+    async def promote_admin(
+        self,
+        peer: str | int,
+        user_peer: str | int,
+        *,
+        title: str | None = None,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        user, _ = await self._resolve_scoped_entity(
+            user_peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        types = _telethon_types()
+        functions = _telethon_functions()
+        rights = types.ChatAdminRights(
+            change_info=True,
+            post_messages=True,
+            edit_messages=True,
+            delete_messages=True,
+            ban_users=True,
+            invite_users=True,
+            pin_messages=True,
+            add_admins=False,
+            anonymous=False,
+            manage_call=True,
+            other=True,
+        )
+        await self._call_telegram(
+            self._client.__call__,
+            functions.channels.EditAdminRequest(
+                channel=entity,
+                user_id=user,
+                admin_rights=rights,
+                rank=(title or "").strip() or "Admin",
+            ),
+            action="promote an admin",
+        )
+        return {"ok": True}
+
+    async def demote_admin(
+        self,
+        peer: str | int,
+        user_peer: str | int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        user, _ = await self._resolve_scoped_entity(
+            user_peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        types = _telethon_types()
+        functions = _telethon_functions()
+        rights = types.ChatAdminRights(
+            change_info=False,
+            post_messages=False,
+            edit_messages=False,
+            delete_messages=False,
+            ban_users=False,
+            invite_users=False,
+            pin_messages=False,
+            add_admins=False,
+            anonymous=False,
+            manage_call=False,
+            other=False,
+        )
+        await self._call_telegram(
+            self._client.__call__,
+            functions.channels.EditAdminRequest(
+                channel=entity,
+                user_id=user,
+                admin_rights=rights,
+                rank="",
+            ),
+            action="demote an admin",
+        )
+        return {"ok": True}
+
+    async def ban_user(
+        self,
+        peer: str | int,
+        user_peer: str | int,
+        *,
+        until_date: int | None = None,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        user, _ = await self._resolve_scoped_entity(
+            user_peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        types = _telethon_types()
+        functions = _telethon_functions()
+        rights = types.ChatBannedRights(
+            until_date=until_date,
+            view_messages=True,
+            send_messages=True,
+            send_media=True,
+            send_stickers=True,
+            send_gifs=True,
+            send_games=True,
+            send_inline=True,
+            embed_links=True,
+            send_polls=True,
+            change_info=True,
+            invite_users=True,
+            pin_messages=True,
+        )
+        await self._call_telegram(
+            self._client.__call__,
+            functions.channels.EditBannedRequest(
+                channel=entity,
+                participant=user,
+                banned_rights=rights,
+            ),
+            action="ban a user",
+        )
+        return {"ok": True}
+
+    async def unban_user(
+        self,
+        peer: str | int,
+        user_peer: str | int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        user, _ = await self._resolve_scoped_entity(
+            user_peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        types = _telethon_types()
+        functions = _telethon_functions()
+        rights = types.ChatBannedRights(
+            until_date=None,
+            view_messages=False,
+            send_messages=False,
+            send_media=False,
+            send_stickers=False,
+            send_gifs=False,
+            send_games=False,
+            send_inline=False,
+            embed_links=False,
+            send_polls=False,
+            change_info=False,
+            invite_users=False,
+            pin_messages=False,
+        )
+        await self._call_telegram(
+            self._client.__call__,
+            functions.channels.EditBannedRequest(
+                channel=entity,
+                participant=user,
+                banned_rights=rights,
+            ),
+            action="unban a user",
+        )
+        return {"ok": True}
+
+    async def get_chat(
+        self,
+        peer: str | int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        data = {
+            "id": getattr(entity, "id", None),
+            "username": getattr(entity, "username", None),
+            "title": _entity_display_name(entity),
+            "type": _resolve_chat_type(entity),
+        }
+        functions = _telethon_functions()
+        try:
+            if getattr(entity, "broadcast", False) or getattr(entity, "megagroup", False):
+                full = await self._call_telegram(
+                    self._client.__call__,
+                    functions.channels.GetFullChannelRequest(channel=entity),
+                    action="read chat details",
+                )
+                full_chat = getattr(full, "full_chat", None)
+                data["about"] = getattr(full_chat, "about", None)
+                data["participants_count"] = getattr(full_chat, "participants_count", None)
+            elif getattr(entity, "title", None) is not None:
+                full = await self._call_telegram(
+                    self._client.__call__,
+                    functions.messages.GetFullChatRequest(chat_id=getattr(entity, "id", None)),
+                    action="read chat details",
+                )
+                full_chat = getattr(full, "full_chat", None)
+                data["participants_count"] = getattr(full_chat, "participants_count", None)
+        except BridgeError:
+            raise
+        except Exception:
+            logger.debug("Unable to fetch full chat info", exc_info=True)
+        return data
+
+    async def get_history(
+        self,
+        peer: str | int,
+        *,
+        limit: int = 100,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.get_messages(
+            peer,
+            limit=min(max(1, limit), 100),
+            policy_overrides=policy_overrides,
+        )
+
+    async def search_public_chats(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        query = (query or "").strip()
+        if not query:
+            raise BridgeValidationError("query is required.")
+        functions = _telethon_functions()
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.contacts.SearchRequest(q=query, limit=min(max(1, limit), 50)),
+            action="search public chats",
+        )
+        found: list[dict[str, Any]] = []
+        for collection_name in ("users", "chats"):
+            for entity in getattr(result, collection_name, []) or []:
+                keys = _build_candidate_keys(entity=entity)
+                if not _scope_matches(keys, policy.read_scope):
+                    continue
+                found.append(
+                    {
+                        "id": getattr(entity, "id", None),
+                        "username": getattr(entity, "username", None),
+                        "title": _entity_display_name(entity),
+                        "type": _resolve_chat_type(entity),
+                    }
+                )
+        return found
+
+    async def get_recent_actions(
+        self,
+        peer: str | int,
+        *,
+        limit: int = 20,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        functions = _telethon_functions()
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.channels.GetAdminLogRequest(
+                channel=entity,
+                q="",
+                events_filter=None,
+                admins=[],
+                max_id=0,
+                min_id=0,
+                limit=min(max(1, limit), 50),
+            ),
+            action="read recent admin actions",
+        )
+        events = getattr(result, "events", []) or []
+        return [
+            {
+                "id": getattr(event, "id", None),
+                "date": _isoformat(getattr(event, "date", None)),
+                "user_id": getattr(event, "user_id", None),
+                "action": type(getattr(event, "action", None)).__name__,
+            }
+            for event in events
+        ]
+
+    async def get_pinned_messages(
+        self,
+        peer: str | int,
+        *,
+        limit: int = 20,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        types = _telethon_types()
+        try:
+            messages = await self._call_telegram(
+                self._client.get_messages,
+                entity,
+                limit=min(max(1, limit), 50),
+                filter=types.InputMessagesFilterPinned(),
+                action="read pinned messages",
+            )
+        except Exception:
+            all_messages = await self._call_telegram(
+                self._client.get_messages,
+                entity,
+                limit=min(max(1, limit), 50),
+                action="read pinned messages",
+            )
+            messages = [message for message in all_messages if getattr(message, "pinned", False)]
+        return _serialize_messages(messages, entity=entity)
+
+    async def send_reaction(
+        self,
+        peer: str | int,
+        message_id: int,
+        emoji: str,
+        *,
+        big: bool = False,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        if message_id < 1:
+            raise BridgeValidationError("message_id must be >= 1.")
+        emoji = (emoji or "").strip()
+        if not emoji:
+            raise BridgeValidationError("emoji is required.")
+        async with self._send_lock:
+            entity, _ = await self._resolve_scoped_entity(
+                peer,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            await self._delay_before_write(policy)
+            types = _telethon_types()
+            functions = _telethon_functions()
+            input_peer = await self._call_telegram(
+                self._client.get_input_entity,
+                entity,
+                action="resolve reaction peer",
+            )
+            await self._call_telegram(
+                self._client.__call__,
+                functions.messages.SendReactionRequest(
+                    peer=input_peer,
+                    msg_id=message_id,
+                    big=big,
+                    reaction=[types.ReactionEmoji(emoticon=emoji)],
+                ),
+                action="send a reaction",
+                allow_flood_retry=True,
+            )
+            return {"ok": True}
+
+    async def remove_reaction(
+        self,
+        peer: str | int,
+        message_id: int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        if message_id < 1:
+            raise BridgeValidationError("message_id must be >= 1.")
+        async with self._send_lock:
+            entity, _ = await self._resolve_scoped_entity(
+                peer,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            await self._delay_before_write(policy)
+            functions = _telethon_functions()
+            input_peer = await self._call_telegram(
+                self._client.get_input_entity,
+                entity,
+                action="resolve reaction peer",
+            )
+            await self._call_telegram(
+                self._client.__call__,
+                functions.messages.SendReactionRequest(
+                    peer=input_peer,
+                    msg_id=message_id,
+                    reaction=[],
+                ),
+                action="remove a reaction",
+                allow_flood_retry=True,
+            )
+            return {"ok": True}
+
+    async def get_message_reactions(
+        self,
+        peer: str | int,
+        message_id: int,
+        *,
+        limit: int = 50,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        if message_id < 1:
+            raise BridgeValidationError("message_id must be >= 1.")
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        functions = _telethon_functions()
+        input_peer = await self._call_telegram(
+            self._client.get_input_entity,
+            entity,
+            action="resolve reactions peer",
+        )
+        result = await self._call_telegram(
+            self._client.__call__,
+            functions.messages.GetMessageReactionsListRequest(
+                peer=input_peer,
+                id=message_id,
+                limit=min(max(1, limit), 100),
+            ),
+            action="read message reactions",
+        )
+        reactions: list[dict[str, Any]] = []
+        for reaction in getattr(result, "reactions", []) or []:
+            reaction_type = getattr(reaction, "reaction", None)
+            reactions.append(
+                {
+                    "count": getattr(reaction, "count", None),
+                    "emoji": getattr(reaction_type, "emoticon", None),
+                }
+            )
+        return reactions
+
+    async def leave_chat(
+        self,
+        peer: str | int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        async with self._send_lock:
+            entity, _ = await self._resolve_scoped_entity(
+                peer,
+                action="writing",
+                scope=policy.write_scope,
+            )
+            await self._delay_before_write(policy)
+            await self._call_telegram(
+                self._client.delete_dialog,
+                entity,
+                action="leave a chat",
+            )
+            return {"ok": True}
 
     async def get_dialogs(
         self,

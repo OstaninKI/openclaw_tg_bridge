@@ -21,6 +21,7 @@ from openclaw_tg_bridge.config import (
     resolve_effective_policy,
     resolve_session_path,
 )
+from openclaw_tg_bridge.lock import ProcessLock
 from openclaw_tg_bridge.state import DmCursorStore, SourceInventoryStore
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ _sources_store: SourceInventoryStore | None = None
 _dm_cursor_store: DmCursorStore | None = None
 _dm_broker: "DmInboxBroker | None" = None
 _resolved_peer_cache: "ResolvedPeerCache | None" = None
+_process_lock: ProcessLock | None = None
 
 
 def get_bridge() -> BridgeClient:
@@ -241,10 +243,12 @@ async def _create_client() -> BridgeClient:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _bridge, _config, _policy_store, _sources_store, _dm_cursor_store, _dm_broker, _resolved_peer_cache
+    global _bridge, _config, _policy_store, _sources_store, _dm_cursor_store, _dm_broker, _resolved_peer_cache, _process_lock
     from telethon import events
 
     _config = load_config()
+    _process_lock = ProcessLock(_config.get("lock_path"))
+    _process_lock.acquire()
     _policy_store = PolicyStore(_config.get("policy_path"))
     _sources_store = SourceInventoryStore(_config.get("sources_inventory_path"))
     _dm_cursor_store = DmCursorStore(_config.get("inbox_state_path"))
@@ -292,6 +296,9 @@ async def lifespan(app: FastAPI):
         _dm_cursor_store = None
         _dm_broker = None
         _resolved_peer_cache = None
+        if _process_lock is not None:
+            _process_lock.release()
+        _process_lock = None
 
 
 app = FastAPI(title="OpenClaw Telegram Bridge", lifespan=lifespan)
@@ -326,6 +333,113 @@ class SendMessageBody(BaseModel):
     peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
     text: str = Field(..., min_length=1, max_length=4096)
     reply_to: int | None = None
+
+
+class SendFileBody(BaseModel):
+    peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
+    file_path: str = Field(..., min_length=1)
+    caption: str | None = None
+    reply_to: int | None = None
+
+
+class SendLocationBody(BaseModel):
+    peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
+
+
+class EditMessageBody(BaseModel):
+    peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
+    message_id: int = Field(..., ge=1)
+    text: str = Field(..., min_length=1, max_length=4096)
+
+
+class DeleteMessageBody(BaseModel):
+    peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
+    message_id: int = Field(..., ge=1)
+    revoke: bool = True
+
+
+class ForwardMessageBody(BaseModel):
+    from_peer: str | int = Field(..., description="Source username or chat id")
+    to_peer: str | int = Field(..., description="Destination username or chat id")
+    message_id: int = Field(..., ge=1)
+
+
+class SearchMessagesBody(BaseModel):
+    peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
+    query: str = Field(..., min_length=1)
+    limit: int = Field(default=20, ge=1, le=50)
+    from_user: str | int | None = None
+
+
+class LeaveChatBody(BaseModel):
+    peer: str | int = Field(..., description="Username (@name) or chat id")
+
+
+class SendVoiceBody(BaseModel):
+    peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
+    file_path: str = Field(..., min_length=1)
+    caption: str | None = None
+
+
+class SendStickerBody(BaseModel):
+    peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
+    file_path: str = Field(..., min_length=1)
+
+
+class ContactBody(BaseModel):
+    phone: str = Field(..., min_length=1)
+    first_name: str = Field(..., min_length=1)
+    last_name: str | None = None
+
+
+class ContactPeerBody(BaseModel):
+    peer: str | int = Field(..., description="User username or id")
+
+
+class SearchContactsBody(BaseModel):
+    query: str = Field(..., min_length=1)
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class GroupBody(BaseModel):
+    title: str = Field(..., min_length=1)
+    users: list[str | int] = Field(default_factory=list)
+
+
+class ChannelBody(BaseModel):
+    title: str = Field(..., min_length=1)
+    about: str | None = None
+    megagroup: bool = False
+
+
+class InviteUsersBody(BaseModel):
+    peer: str | int = Field(..., description="Group/channel username or id")
+    users: list[str | int] = Field(default_factory=list)
+
+
+class InviteLinkBody(BaseModel):
+    link: str = Field(..., min_length=1)
+
+
+class AdminMutationBody(BaseModel):
+    peer: str | int = Field(..., description="Group/channel username or id")
+    user_peer: str | int = Field(..., description="User username or id")
+    title: str | None = None
+    until_date: int | None = None
+
+
+class ReactionBody(BaseModel):
+    peer: str | int = Field(..., description="Chat username or id")
+    message_id: int = Field(..., ge=1)
+    emoji: str = Field(..., min_length=1)
+    big: bool = False
+
+
+class ReactionDeleteBody(BaseModel):
+    peer: str | int = Field(..., description="Chat username or id")
+    message_id: int = Field(..., ge=1)
 
 
 class SyncSourcesBody(BaseModel):
@@ -500,6 +614,151 @@ async def send_message(request: Request, body: SendMessageBody):
         raise HTTPException(status_code=502, detail="Request failed")
 
 
+@app.post("/send_file")
+async def send_file(request: Request, body: SendFileBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        result = await bridge.send_file(
+            body.peer,
+            body.file_path,
+            caption=body.caption,
+            reply_to=body.reply_to,
+            policy_overrides=overrides,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("send_file failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/send_voice")
+async def send_voice(request: Request, body: SendVoiceBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.send_voice(
+            body.peer,
+            body.file_path,
+            caption=body.caption,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("send_voice failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/send_sticker")
+async def send_sticker(request: Request, body: SendStickerBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.send_sticker(
+            body.peer,
+            body.file_path,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("send_sticker failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/send_location")
+async def send_location(request: Request, body: SendLocationBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        result = await bridge.send_location(
+            body.peer,
+            latitude=body.latitude,
+            longitude=body.longitude,
+            policy_overrides=overrides,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("send_location failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/edit_message")
+async def edit_message(request: Request, body: EditMessageBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        result = await bridge.edit_message(
+            body.peer,
+            body.message_id,
+            body.text,
+            policy_overrides=overrides,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("edit_message failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/delete_message")
+async def delete_message(request: Request, body: DeleteMessageBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        result = await bridge.delete_message(
+            body.peer,
+            body.message_id,
+            revoke=body.revoke,
+            policy_overrides=overrides,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("delete_message failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/forward_message")
+async def forward_message(request: Request, body: ForwardMessageBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        result = await bridge.forward_message(
+            body.from_peer,
+            body.to_peer,
+            body.message_id,
+            policy_overrides=overrides,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("forward_message failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
 @app.get("/me")
 async def me():
     bridge = get_bridge()
@@ -510,6 +769,56 @@ async def me():
         raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
     except Exception:
         logger.exception("get_me failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/chat")
+async def chat(request: Request, peer: str | int):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.get_chat(peer, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("get_chat failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/message")
+async def message(request: Request, peer: str | int, message_id: int):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.get_message(
+            peer,
+            message_id,
+            policy_overrides=overrides,
+        )
+        return data
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("get_message failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/media_info")
+async def media_info(request: Request, peer: str | int, message_id: int):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.get_media_info(peer, message_id, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("get_media_info failed")
         raise HTTPException(status_code=502, detail="Request failed")
 
 
@@ -579,6 +888,547 @@ async def messages(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
     except Exception:
         logger.exception("get_messages failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/search_messages")
+async def search_messages(request: Request, body: SearchMessagesBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.search_messages(
+            body.peer,
+            body.query,
+            limit=body.limit,
+            from_user=body.from_user,
+            policy_overrides=overrides,
+        )
+        return {"messages": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("search_messages failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/history")
+async def history(request: Request, peer: str | int, limit: int = 100):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.get_history(peer, limit=limit, policy_overrides=overrides)
+        return {"messages": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("history failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/search_public_chats")
+async def search_public_chats(request: Request, query: str, limit: int = 20):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.search_public_chats(query, limit=limit, policy_overrides=overrides)
+        return {"results": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("search_public_chats failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/download_media")
+async def download_media(request: Request, peer: str | int, message_id: int, output_path: str | None = None):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.download_media(
+            peer,
+            message_id,
+            output_path=output_path,
+            policy_overrides=overrides,
+        )
+        return data
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("download_media failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/contacts")
+async def contacts(request: Request):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return {"contacts": await bridge.list_contacts(policy_overrides=overrides)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("contacts failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/search_contacts")
+async def search_contacts(request: Request, body: SearchContactsBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return {"contacts": await bridge.search_contacts(body.query, limit=body.limit, policy_overrides=overrides)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("search_contacts failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/contacts/add")
+async def add_contact(request: Request, body: ContactBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.add_contact(
+            body.phone,
+            body.first_name,
+            body.last_name,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("add_contact failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/contacts/delete")
+async def delete_contact(request: Request, body: ContactPeerBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.delete_contact(body.peer, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("delete_contact failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/blocked_users")
+async def blocked_users(request: Request, limit: int = 100):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return {"users": await bridge.get_blocked_users(limit=limit, policy_overrides=overrides)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("blocked_users failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/block_user")
+async def block_user(request: Request, body: ContactPeerBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.block_user(body.peer, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("block_user failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/unblock_user")
+async def unblock_user(request: Request, body: ContactPeerBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.unblock_user(body.peer, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("unblock_user failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/resolve_username")
+async def resolve_username(username: str):
+    bridge = get_bridge()
+    try:
+        return await bridge.resolve_username(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("resolve_username failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/user_status")
+async def user_status(peer: str | int):
+    bridge = get_bridge()
+    try:
+        return await bridge.get_user_status(peer)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("user_status failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/participants")
+async def participants(request: Request, peer: str | int, limit: int = 100, offset: int = 0):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.get_participants(
+            peer,
+            limit=limit,
+            offset=offset,
+            policy_overrides=overrides,
+        )
+        return {"participants": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("participants failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/admins")
+async def admins(request: Request, peer: str | int, limit: int = 100):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.get_admins(
+            peer,
+            limit=limit,
+            policy_overrides=overrides,
+        )
+        return {"admins": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("admins failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/banned_users")
+async def banned_users(request: Request, peer: str | int, limit: int = 100, offset: int = 0):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.get_banned_users(
+            peer,
+            limit=limit,
+            offset=offset,
+            policy_overrides=overrides,
+        )
+        return {"users": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("banned_users failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/create_group")
+async def create_group(request: Request, body: GroupBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.create_group(body.title, body.users, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("create_group failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/create_channel")
+async def create_channel(request: Request, body: ChannelBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.create_channel(
+            body.title,
+            about=body.about,
+            megagroup=body.megagroup,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("create_channel failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/invite_to_group")
+async def invite_to_group(request: Request, body: InviteUsersBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.invite_to_group(body.peer, body.users, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("invite_to_group failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/invite_link")
+async def invite_link(request: Request, peer: str | int):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.get_invite_link(peer, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("invite_link failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/join_chat_by_link")
+async def join_chat_by_link(request: Request, body: InviteLinkBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.join_chat_by_link(body.link, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("join_chat_by_link failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/promote_admin")
+async def promote_admin(request: Request, body: AdminMutationBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.promote_admin(
+            body.peer,
+            body.user_peer,
+            title=body.title,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("promote_admin failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/demote_admin")
+async def demote_admin(request: Request, body: AdminMutationBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.demote_admin(
+            body.peer,
+            body.user_peer,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("demote_admin failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/ban_user")
+async def ban_user(request: Request, body: AdminMutationBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.ban_user(
+            body.peer,
+            body.user_peer,
+            until_date=body.until_date,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("ban_user failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/unban_user")
+async def unban_user(request: Request, body: AdminMutationBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.unban_user(
+            body.peer,
+            body.user_peer,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("unban_user failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/recent_actions")
+async def recent_actions(request: Request, peer: str | int, limit: int = 20):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.get_recent_actions(peer, limit=limit, policy_overrides=overrides)
+        return {"events": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("recent_actions failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/pinned_messages")
+async def pinned_messages(request: Request, peer: str | int, limit: int = 20):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.get_pinned_messages(peer, limit=limit, policy_overrides=overrides)
+        return {"messages": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("pinned_messages failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/send_reaction")
+async def send_reaction(request: Request, body: ReactionBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.send_reaction(
+            body.peer,
+            body.message_id,
+            body.emoji,
+            big=body.big,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("send_reaction failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/remove_reaction")
+async def remove_reaction(request: Request, body: ReactionDeleteBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.remove_reaction(
+            body.peer,
+            body.message_id,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("remove_reaction failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/message_reactions")
+async def message_reactions(request: Request, peer: str | int, message_id: int, limit: int = 50):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.get_message_reactions(
+            peer,
+            message_id,
+            limit=limit,
+            policy_overrides=overrides,
+        )
+        return {"reactions": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("message_reactions failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/leave_chat")
+async def leave_chat(request: Request, body: LeaveChatBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.leave_chat(body.peer, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("leave_chat failed")
         raise HTTPException(status_code=502, detail="Request failed")
 
 

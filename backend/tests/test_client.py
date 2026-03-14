@@ -58,9 +58,17 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.mock_tg.disconnect = AsyncMock()
         self.mock_tg.get_entity = AsyncMock()
         self.mock_tg.send_message = AsyncMock()
+        self.mock_tg.send_file = AsyncMock()
+        self.mock_tg.edit_message = AsyncMock()
+        self.mock_tg.delete_messages = AsyncMock()
+        self.mock_tg.forward_messages = AsyncMock()
         self.mock_tg.get_dialogs = AsyncMock()
         self.mock_tg.get_messages = AsyncMock()
         self.mock_tg.get_me = AsyncMock(return_value=SimpleNamespace(id=1, username="me"))
+        self.mock_tg.download_media = AsyncMock()
+        self.mock_tg.get_participants = AsyncMock()
+        self.mock_tg.delete_dialog = AsyncMock()
+        self.mock_tg.get_input_entity = AsyncMock()
 
     def create_bridge(self, **kwargs: object) -> BridgeClient:
         options: dict[str, object] = {
@@ -452,6 +460,208 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         messages = await bridge.get_incoming_direct_messages("42", min_id=8, limit=10)
 
         self.assertEqual([message["id"] for message in messages], [10])
+
+    async def test_send_file_uses_write_scope(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.send_file.return_value = SimpleNamespace(id=333)
+
+        with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()), patch(
+            "openclaw_tg_bridge.client.Path.exists", return_value=True
+        ):
+            result = await bridge.send_file("42", "/tmp/file.txt", caption="hello")
+
+        self.assertEqual(result["message_id"], 333)
+        self.mock_tg.send_file.assert_awaited_once_with(
+            entity,
+            "/tmp/file.txt",
+            caption="hello",
+            reply_to=None,
+        )
+
+    async def test_get_message_includes_media_and_geo_metadata(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_messages.return_value = SimpleNamespace(
+            id=71,
+            text="photo from field",
+            date=datetime(2026, 3, 14, 10, 0, tzinfo=timezone.utc),
+            out=False,
+            sender_id=7,
+            sender=SimpleNamespace(first_name="Alice", last_name=None, username="alice"),
+            media=SimpleNamespace(
+                geo=SimpleNamespace(lat=35.1, long=33.4),
+                title="Office",
+                address="Cyprus",
+            ),
+            file=SimpleNamespace(name="photo.jpg", size=1234, mime_type="image/jpeg"),
+            entities=[],
+        )
+
+        message = await bridge.get_message("42", 71)
+
+        self.assertEqual(message["id"], 71)
+        self.assertTrue(message["has_media"])
+        self.assertEqual(message["file_name"], "photo.jpg")
+        self.assertEqual(message["latitude"], 35.1)
+        self.assertEqual(message["longitude"], 33.4)
+
+    async def test_search_messages_serializes_results(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_messages.return_value = [
+            SimpleNamespace(
+                id=91,
+                text="release note",
+                date=datetime(2026, 3, 14, 10, 0, tzinfo=timezone.utc),
+                out=False,
+                sender_id=7,
+                sender=SimpleNamespace(first_name="Alice", last_name=None, username="alice"),
+            )
+        ]
+
+        messages = await bridge.search_messages("42", "release", limit=5)
+
+        self.assertEqual(messages[0]["id"], 91)
+        self.assertEqual(messages[0]["sender_name"], "Alice")
+        self.mock_tg.get_messages.assert_awaited_once_with(entity, limit=5, search="release", from_user=None)
+
+    async def test_get_participants_uses_scoped_read(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_participants.return_value = [
+            SimpleNamespace(id=7, username="alice", first_name="Alice", last_name=None, bot=False)
+        ]
+
+        participants = await bridge.get_participants("42", limit=50, offset=10)
+
+        self.assertEqual(participants, [{"id": 7, "username": "alice", "title": "Alice", "bot": False}])
+        self.mock_tg.get_participants.assert_awaited_once_with(entity, limit=50, offset=10)
+
+    async def test_list_contacts_filters_by_read_scope(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        functions_ns = SimpleNamespace(
+            contacts=SimpleNamespace(GetContactsRequest=lambda **kwargs: {"kind": "contacts", **kwargs})
+        )
+        self.mock_tg.__call__.return_value = SimpleNamespace(
+            users=[
+                SimpleNamespace(id=42, username="allowed", first_name="Allowed", phone="123"),
+                SimpleNamespace(id=99, username="blocked", first_name="Blocked", phone="456"),
+            ]
+        )
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            contacts = await bridge.list_contacts()
+
+        self.assertEqual(contacts, [{"id": 42, "username": "allowed", "title": "Allowed", "phone": "123"}])
+
+    async def test_add_contact_requires_self_write_access(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+
+        with self.assertRaisesRegex(BridgeForbiddenError, "creating contacts"):
+            await bridge.add_contact("+123", "Alice")
+
+    async def test_create_group_uses_me_and_user_write_scope(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["me", "42", "43"])
+        self.mock_tg.get_entity.side_effect = [
+            SimpleNamespace(id=42, username="alice"),
+            SimpleNamespace(id=43, username="bob"),
+        ]
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(CreateChatRequest=lambda **kwargs: {"kind": "create_chat", **kwargs})
+        )
+        self.mock_tg.__call__.return_value = SimpleNamespace(chats=[SimpleNamespace(id=555, title="Ops")])
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            result = await bridge.create_group("Ops", ["42", "43"])
+
+        self.assertEqual(result["chat_id"], 555)
+        self.mock_tg.__call__.assert_awaited_once()
+
+    async def test_send_reaction_uses_input_peer(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        input_entity = SimpleNamespace(id=42)
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_input_entity.return_value = input_entity
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(SendReactionRequest=lambda **kwargs: {"kind": "reaction", **kwargs})
+        )
+        types_ns = SimpleNamespace(ReactionEmoji=lambda emoticon: {"emoji": emoticon})
+
+        with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()), patch(
+            "openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns
+        ), patch("openclaw_tg_bridge.client._telethon_types", return_value=types_ns):
+            result = await bridge.send_reaction("42", 77, "🔥", big=True)
+
+        self.assertTrue(result["ok"])
+        self.mock_tg.get_input_entity.assert_awaited_once_with(entity)
+
+    async def test_get_message_reactions_returns_emoji_counts(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        input_entity = SimpleNamespace(id=42)
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_input_entity.return_value = input_entity
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(GetMessageReactionsListRequest=lambda **kwargs: {"kind": "reaction_list", **kwargs})
+        )
+        self.mock_tg.__call__.return_value = SimpleNamespace(
+            reactions=[
+                SimpleNamespace(count=3, reaction=SimpleNamespace(emoticon="🔥")),
+                SimpleNamespace(count=1, reaction=SimpleNamespace(emoticon="👍")),
+            ]
+        )
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            reactions = await bridge.get_message_reactions("42", 77, limit=20)
+
+        self.assertEqual(reactions, [{"count": 3, "emoji": "🔥"}, {"count": 1, "emoji": "👍"}])
+
+    async def test_get_chat_loads_full_channel_info(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="channel", title="Channel", broadcast=True, megagroup=False)
+        self.mock_tg.get_entity.return_value = entity
+        functions_ns = SimpleNamespace(
+            channels=SimpleNamespace(GetFullChannelRequest=lambda **kwargs: {"kind": "full_channel", **kwargs})
+        )
+        self.mock_tg.__call__.return_value = SimpleNamespace(
+            full_chat=SimpleNamespace(about="About text", participants_count=17)
+        )
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            chat = await bridge.get_chat("42")
+
+        self.assertEqual(chat["participants_count"], 17)
+        self.assertEqual(chat["about"], "About text")
+
+    async def test_get_recent_actions_serializes_events(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="channel", title="Channel", broadcast=True)
+        self.mock_tg.get_entity.return_value = entity
+        functions_ns = SimpleNamespace(
+            channels=SimpleNamespace(GetAdminLogRequest=lambda **kwargs: {"kind": "admin_log", **kwargs})
+        )
+        self.mock_tg.__call__.return_value = SimpleNamespace(
+            events=[
+                SimpleNamespace(
+                    id=1,
+                    date=datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc),
+                    user_id=7,
+                    action=SimpleNamespace(),
+                )
+            ]
+        )
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            events = await bridge.get_recent_actions("42", limit=10)
+
+        self.assertEqual(events[0]["id"], 1)
+        self.assertEqual(events[0]["user_id"], 7)
 
 
 if __name__ == "__main__":

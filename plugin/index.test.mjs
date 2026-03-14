@@ -56,6 +56,16 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   register(api);
 
   assert.ok(getTool(api, "telegram_owner_send_message"));
+  assert.ok(getTool(api, "telegram_owner_send_file"));
+  assert.ok(getTool(api, "telegram_owner_send_location"));
+  assert.ok(getTool(api, "telegram_owner_edit_message"));
+  assert.ok(getTool(api, "telegram_owner_delete_message"));
+  assert.ok(getTool(api, "telegram_owner_forward_message"));
+  assert.ok(getTool(api, "telegram_owner_get_message"));
+  assert.ok(getTool(api, "telegram_owner_search_messages"));
+  assert.ok(getTool(api, "telegram_owner_download_media"));
+  assert.ok(getTool(api, "telegram_owner_get_participants"));
+  assert.ok(getTool(api, "telegram_owner_get_admins"));
   assert.ok(getTool(api, "telegram_shared_get_messages"));
   assert.equal(getTool(api, "telegram_user_send_message"), undefined);
 
@@ -80,6 +90,110 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   assert.equal(capturedInit.headers["X-OpenClaw-Allow-From"], "@durov,-1001");
   assert.equal(capturedInit.headers["X-OpenClaw-Write-To"], "me");
   assert.match(result.content[0].text, /Message sent/);
+});
+
+test("plugin sends file via backend endpoint", async () => {
+  const api = createApi();
+  register(api);
+
+  let capturedUrl = "";
+  let capturedInit = undefined;
+  globalThis.fetch = async (url, init) => {
+    capturedUrl = url;
+    capturedInit = init;
+    return new Response(JSON.stringify({ ok: true, message_id: 456 }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const tool = getTool(api, "telegram_user_send_file");
+  const result = await tool.execute("1", { peer: "me", file_path: "/tmp/test.txt", caption: "doc" });
+
+  assert.equal(capturedUrl, "http://127.0.0.1:8765/send_file");
+  assert.equal(capturedInit.method, "POST");
+  assert.match(capturedInit.body, /\/tmp\/test\.txt/);
+  assert.match(result.content[0].text, /File sent/);
+});
+
+test("plugin downloads media via backend endpoint", async () => {
+  const api = createApi();
+  register(api);
+
+  let capturedUrl = "";
+  globalThis.fetch = async (url) => {
+    capturedUrl = url;
+    return new Response(JSON.stringify({ path: "/tmp/photo.jpg" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const tool = getTool(api, "telegram_user_download_media");
+  const result = await tool.execute("1", { peer: -1001, message_id: 77, output_path: "/tmp/photo.jpg" });
+
+  assert.equal(
+    capturedUrl,
+    "http://127.0.0.1:8765/download_media?peer=-1001&message_id=77&output_path=%2Ftmp%2Fphoto.jpg"
+  );
+  assert.match(result.content[0].text, /Media downloaded/);
+});
+
+test("plugin sends reaction and block user via backend endpoints", async () => {
+  const api = createApi();
+  register(api);
+
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url, init });
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  await getTool(api, "telegram_user_send_reaction").execute("1", {
+    peer: -1001,
+    message_id: 77,
+    emoji: "🔥",
+    big: true,
+  });
+  await getTool(api, "telegram_user_block_user").execute("2", { peer: "@durov" });
+
+  assert.equal(seen[0].url, "http://127.0.0.1:8765/send_reaction");
+  assert.match(seen[0].init.body, /"emoji":"🔥"/);
+  assert.equal(seen[1].url, "http://127.0.0.1:8765/block_user");
+  assert.match(seen[1].init.body, /@durov/);
+});
+
+test("plugin reads contacts and recent actions via backend endpoints", async () => {
+  const api = createApi();
+  register(api);
+
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(url);
+    const isContacts = String(url).includes("/contacts");
+    return new Response(
+      JSON.stringify(
+        isContacts
+          ? { contacts: [{ id: 1, title: "Alice", username: "alice", phone: "123" }] }
+          : { events: [{ id: 9, user_id: 7, action: "MessageEdit", date: "2026-03-14T10:00:00+00:00" }] }
+      ),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }
+    );
+  };
+
+  const contacts = await getTool(api, "telegram_user_list_contacts").execute("1", {});
+  const actions = await getTool(api, "telegram_user_get_recent_actions").execute("2", { peer: -1001, limit: 10 });
+
+  assert.equal(urls[0], "http://127.0.0.1:8765/contacts");
+  assert.equal(urls[1], "http://127.0.0.1:8765/recent_actions?peer=-1001&limit=10");
+  assert.match(contacts.content[0].text, /Alice/);
+  assert.match(actions.content[0].text, /MessageEdit/);
 });
 
 test("plugin passes min_id, since_unix and topic_id for polling", async () => {

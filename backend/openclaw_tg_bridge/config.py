@@ -97,6 +97,7 @@ def load_config() -> dict[str, Any]:
     )
     sources_inventory_path = os.environ.get("TELEGRAM_SOURCES_INVENTORY_PATH", "").strip()
     inbox_state_path = os.environ.get("TELEGRAM_INBOX_STATE_PATH", "").strip()
+    lock_path = os.environ.get("TELEGRAM_LOCK_PATH", "").strip()
     sources_refresh_sec = _get_float("TELEGRAM_SOURCES_REFRESH_SEC") or 300.0
     sources_dialog_limit = _get_int("TELEGRAM_SOURCES_DIALOG_LIMIT") or 500
 
@@ -134,6 +135,7 @@ def load_config() -> dict[str, Any]:
         "policy_default_profile": policy_default_profile or None,
         "sources_inventory_path": sources_inventory_path or str(default_state_dir / "sources_inventory.json"),
         "inbox_state_path": inbox_state_path or str(default_state_dir / "dm_inbox_state.json"),
+        "lock_path": lock_path or str(default_state_dir / "bridge.lock"),
         "sources_refresh_sec": max(0.0, sources_refresh_sec),
         "sources_dialog_limit": min(max(50, sources_dialog_limit), 2000),
     }

@@ -39,6 +39,45 @@ The isolation boundary is **not** the Telegram account. It is the combination of
 - Topic-aware forum helpers:
   - `list_topics(peer)` for Telegram forum chats
   - `get_messages(peer, topic_id=...)` for one specific forum thread
+- Richer interactive actions:
+  - `send_file`
+  - `send_voice`
+  - `send_sticker`
+  - `send_location`
+  - `edit_message`
+  - `delete_message`
+  - `forward_message`
+  - `search_messages`
+  - `download_media`
+  - `media_info`
+  - `get_participants`
+  - `get_admins`
+  - `get_banned_users`
+  - `list_contacts`
+  - `search_contacts`
+  - `add_contact`
+  - `delete_contact`
+  - `block_user`
+  - `unblock_user`
+  - `get_blocked_users`
+  - `create_group`
+  - `create_channel`
+  - `invite_to_group`
+  - `join_chat_by_link`
+  - `get_invite_link`
+  - `promote_admin`
+  - `demote_admin`
+  - `ban_user`
+  - `unban_user`
+  - `get_chat`
+  - `get_history`
+  - `search_public_chats`
+  - `get_recent_actions`
+  - `get_pinned_messages`
+  - `send_reaction`
+  - `remove_reaction`
+  - `get_message_reactions`
+  - `leave_chat`
 - Message reads are returned in ascending order (`oldest -> newest`) for safer checkpoint updates.
 - Richer message metadata for summaries:
   - `sender_id`
@@ -48,6 +87,11 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `chat_username`
   - `topic_id` (forum thread root/top message id)
   - `reply_to_message_id`
+  - `has_media`
+  - `media_type`
+  - `file_name`
+  - `mime_type`
+  - `latitude` / `longitude`
 - Auto-discovery of sourceable dialogs for `sources_ro`:
   - channels
   - groups
@@ -120,6 +164,7 @@ export TELEGRAM_SESSION_PATH=~/.openclaw/telethon/openclaw_user.session
 
 export TELEGRAM_POLICY_PATH=~/.openclaw/telethon/policy.json
 export TELEGRAM_SOURCES_INVENTORY_PATH=~/.openclaw/telethon/sources_inventory.json
+export TELEGRAM_LOCK_PATH=~/.openclaw/telethon/bridge.lock
 export TELEGRAM_BRIDGE_API_TOKEN=secret
 python -m openclaw_tg_bridge run
 ```
@@ -244,6 +289,54 @@ This will register tools like:
 - `telegram_sources_ro_sync_sources`
 - `telegram_sources_ro_list_topics`
 - `telegram_sources_ro_get_messages`
+
+Interactive profiles also expose the richer Telegram surface. Tool names follow the same prefix pattern, for example:
+
+- messaging/media:
+  - `telegram_owner_dm_send_file`
+  - `telegram_owner_dm_send_voice`
+  - `telegram_owner_dm_send_sticker`
+  - `telegram_owner_dm_send_location`
+  - `telegram_owner_dm_edit_message`
+  - `telegram_owner_dm_delete_message`
+  - `telegram_owner_dm_forward_message`
+  - `telegram_owner_dm_download_media`
+  - `telegram_owner_dm_get_media_info`
+- contacts and users:
+  - `telegram_owner_dm_list_contacts`
+  - `telegram_owner_dm_search_contacts`
+  - `telegram_owner_dm_add_contact`
+  - `telegram_owner_dm_delete_contact`
+  - `telegram_owner_dm_block_user`
+  - `telegram_owner_dm_unblock_user`
+  - `telegram_owner_dm_get_blocked_users`
+  - `telegram_owner_dm_resolve_username`
+  - `telegram_owner_dm_get_user_status`
+- groups/channels/admin:
+  - `telegram_owner_dm_create_group`
+  - `telegram_owner_dm_create_channel`
+  - `telegram_owner_dm_invite_to_group`
+  - `telegram_owner_dm_join_chat_by_link`
+  - `telegram_owner_dm_get_invite_link`
+  - `telegram_owner_dm_get_participants`
+  - `telegram_owner_dm_get_admins`
+  - `telegram_owner_dm_get_banned_users`
+  - `telegram_owner_dm_promote_admin`
+  - `telegram_owner_dm_demote_admin`
+  - `telegram_owner_dm_ban_user`
+  - `telegram_owner_dm_unban_user`
+  - `telegram_owner_dm_leave_chat`
+- reading/analytics:
+  - `telegram_owner_dm_get_chat`
+  - `telegram_owner_dm_get_message`
+  - `telegram_owner_dm_get_history`
+  - `telegram_owner_dm_search_messages`
+  - `telegram_owner_dm_search_public_chats`
+  - `telegram_owner_dm_get_recent_actions`
+  - `telegram_owner_dm_get_pinned_messages`
+  - `telegram_owner_dm_send_reaction`
+  - `telegram_owner_dm_remove_reaction`
+  - `telegram_owner_dm_get_message_reactions`
 
 ### 6. Configure the inbound DM channel
 
@@ -553,6 +646,25 @@ Example forum-wide digest pattern:
 6. update only the checkpoints for topics that produced new messages.
 
 Operational rule: checkpoints belong to OpenClaw, not to the bridge. The bridge only returns deltas and topic metadata.
+
+## Manual smoke checklist
+
+Automated tests cover backend/plugin logic, but live Telegram permissions and RPC behavior still need a manual smoke pass on a real account.
+
+Recommended minimal manual checks after deployment:
+
+1. send a plain text message;
+2. send a file, voice note, sticker, and location pin;
+3. edit and delete one of your own messages;
+4. read one message, download its media, and inspect media metadata;
+5. search messages and fetch recent history from one chat;
+6. list contacts, add one test contact, then delete it;
+7. block and unblock one test user;
+8. list participants/admins on one group or channel;
+9. send/remove a reaction and fetch the reaction list;
+10. if you rely on admin workflows, test promote/demote and ban/unban on a disposable group;
+11. if you rely on onboarding flows, test invite link generation and join-by-link on a disposable group;
+12. verify that a second backend process refuses to start because `TELEGRAM_LOCK_PATH` is already held.
 
 ## Backend configuration
 
