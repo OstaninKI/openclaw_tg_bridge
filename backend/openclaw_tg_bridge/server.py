@@ -1565,7 +1565,7 @@ async def health():
     bridge = get_bridge()
     try:
         if await bridge.ensure_connected():
-            return {"status": "ok"}
-        return JSONResponse(status_code=503, content={"status": "disconnected"})
+            return {"status": "ok", "connected": True}
+        return JSONResponse(status_code=503, content={"status": "disconnected", "connected": False})
     except Exception:
-        return JSONResponse(status_code=503, content={"status": "error"})
+        return JSONResponse(status_code=503, content={"status": "error", "connected": False})

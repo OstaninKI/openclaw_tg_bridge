@@ -169,6 +169,24 @@ export TELEGRAM_BRIDGE_API_TOKEN=secret
 python -m openclaw_tg_bridge run
 ```
 
+For a persistent deploy, use the example systemd unit at [openclaw-tg-bridge.service](/Users/ostaninki/Documents/Projects/OpenClaw_tg_bridge/deploy/openclaw-tg-bridge.service). It already includes restart policy and a small set of safe hardening flags.
+
+Recommended production rule:
+
+- keep `TELEGRAM_BRIDGE_LISTEN=127.0.0.1:8765`;
+- expose the backend only through local OpenClaw or a reverse proxy you control;
+- keep `TELEGRAM_BRIDGE_API_TOKEN` enabled;
+- store the Telethon session, policy JSON, inventory JSON, and inbox cursor JSON under a dedicated service-owned directory.
+
+Minimal systemd install flow:
+
+```bash
+sudo cp deploy/openclaw-tg-bridge.service /etc/systemd/system/openclaw-tg-bridge.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now openclaw-tg-bridge
+sudo systemctl status openclaw-tg-bridge
+```
+
 ### 4. Create the backend policy file
 
 Example `policy.json`:
@@ -670,6 +688,12 @@ Recommended minimal manual checks after deployment:
 9. if you rely on admin workflows, test promote/demote on a disposable basic group and on a disposable supergroup; test ban/unban and recent admin actions on a disposable supergroup or channel;
 10. if you rely on privileged onboarding/account flows, test invite link generation, join-by-link, and leave-chat on a disposable group;
 11. verify that a second backend process refuses to start because `TELEGRAM_LOCK_PATH` is already held.
+
+Useful live checks:
+
+- `curl http://127.0.0.1:8765/health` should return `{"status":"ok","connected":true}` in the healthy state;
+- if Telegram connectivity is down, the same endpoint should return HTTP `503` with `connected:false`;
+- `systemctl status openclaw-tg-bridge` should show automatic restarts after a crash if you use the bundled unit file.
 
 ## Backend configuration
 

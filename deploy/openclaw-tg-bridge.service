@@ -8,9 +8,19 @@ User=openclaw
 Group=openclaw
 WorkingDirectory=/opt/openclaw-tg-bridge/backend
 EnvironmentFile=-/etc/openclaw-tg-bridge.env
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/openclaw-tg-bridge/backend/.venv/bin/python -m openclaw_tg_bridge run
 Restart=on-failure
 RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target
