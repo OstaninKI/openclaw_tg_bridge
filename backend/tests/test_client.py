@@ -1,6 +1,5 @@
 """Unit tests for bridge client logic without real Telethon."""
 
-import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,15 +32,18 @@ class TestClientHelpers(unittest.TestCase):
         self.assertEqual(_normalize_peer("-1000123"), "-1000123")
         self.assertEqual(_normalize_peer(12345), "12345")
 
-    def test_build_policy_treats_star_as_unrestricted(self) -> None:
+    def test_build_policy_read_is_open_and_write_is_closed_by_default(self) -> None:
         policy = build_policy(
-            allow_chat_ids=["*"],
-            deny_chat_ids=["@BadUser"],
+            read_allow_chat_ids=None,
+            read_deny_chat_ids=None,
+            write_allow_chat_ids=None,
+            write_deny_chat_ids=None,
             reply_delay_sec=2,
             reply_delay_max_sec=1,
         )
-        self.assertIsNone(policy.allow)
-        self.assertEqual(policy.deny, frozenset({"baduser"}))
+        self.assertTrue(policy.read_scope.allow_all)
+        self.assertFalse(policy.write_scope.allow_all)
+        self.assertEqual(policy.write_scope.allow, frozenset())
         self.assertEqual(policy.reply_delay_sec, 2.0)
         self.assertIsNone(policy.reply_delay_max_sec)
 
@@ -63,6 +65,8 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
             "reply_delay_sec": 0,
             "allow_chat_ids": None,
             "deny_chat_ids": None,
+            "write_allow_chat_ids": None,
+            "write_deny_chat_ids": None,
             "rpc_timeout_sec": 5,
             "flood_wait_max_sleep_sec": 2,
         }
@@ -71,14 +75,18 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_message_rejects_empty_text(self) -> None:
         bridge = self.create_bridge()
-
         with self.assertRaisesRegex(BridgeValidationError, "empty"):
             await bridge.send_message("me", "   ")
-
         self.mock_tg.send_message.assert_not_called()
 
-    async def test_send_message_uses_resolved_entity_for_allowlist(self) -> None:
-        bridge = self.create_bridge(allow_chat_ids=["42"])
+    async def test_send_message_is_denied_by_default(self) -> None:
+        bridge = self.create_bridge()
+        self.mock_tg.get_entity.return_value = SimpleNamespace(id=42, username="allowed")
+        with self.assertRaisesRegex(BridgeForbiddenError, "Writing is not allowed"):
+            await bridge.send_message("@allowed", "hello")
+
+    async def test_send_message_uses_resolved_entity_for_write_allowlist(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
         entity = SimpleNamespace(id=42, username="AllowedUser")
         self.mock_tg.get_entity.return_value = entity
         self.mock_tg.send_message.return_value = SimpleNamespace(id=100)
@@ -90,17 +98,17 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.mock_tg.send_message.assert_awaited_once_with(entity, "hello", reply_to=None)
         sleep_mock.assert_awaited()
 
-    async def test_send_message_blocks_when_resolved_entity_matches_denylist(self) -> None:
-        bridge = self.create_bridge(deny_chat_ids=["42"])
+    async def test_send_message_blocks_when_resolved_entity_matches_write_denylist(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"], write_deny_chat_ids=["42"])
         entity = SimpleNamespace(id=42, username="AllowedUser")
         self.mock_tg.get_entity.return_value = entity
 
-        with self.assertRaisesRegex(BridgeForbiddenError, "not allowed"):
+        with self.assertRaisesRegex(BridgeForbiddenError, "Writing is not allowed"):
             await bridge.send_message("@AllowedUser", "hello")
 
         self.mock_tg.send_message.assert_not_called()
 
-    async def test_get_dialogs_filters_by_dialog_id_and_username(self) -> None:
+    async def test_get_dialogs_filters_by_read_scope(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["-1001", "@keepme"], deny_chat_ids=["dropme"])
         self.mock_tg.get_dialogs.return_value = [
             SimpleNamespace(id=-1001, entity=SimpleNamespace(id=1, username="keepme", title="Keep")),
@@ -113,7 +121,7 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dialogs, [{"id": -1001, "title": "Keep", "username": "keepme"}])
 
     async def test_send_message_short_flood_wait_retries_once(self) -> None:
-        bridge = self.create_bridge()
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
         entity = SimpleNamespace(id=42, username="allowed")
         self.mock_tg.get_entity.return_value = entity
         self.mock_tg.send_message.side_effect = [FakeFloodWaitError(1), SimpleNamespace(id=77)]
@@ -126,7 +134,7 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         sleep_mock.assert_any_await(1)
 
     async def test_send_message_long_flood_wait_returns_rate_limit(self) -> None:
-        bridge = self.create_bridge()
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
         entity = SimpleNamespace(id=42, username="allowed")
         self.mock_tg.get_entity.return_value = entity
         self.mock_tg.send_message.side_effect = FakeFloodWaitError(30)
@@ -155,16 +163,29 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
                 await bridge.send_message(
                     "@limited",
                     "hello",
-                    policy_overrides={"allow_chat_ids": ["100"]},
+                    policy_overrides={"write_allow_chat_ids": ["100"]},
                 )
 
             result = await bridge.send_message(
                 "@limited",
                 "hello",
-                policy_overrides={"allow_chat_ids": ["99"], "reply_delay_sec": 0},
+                policy_overrides={"write_allow_chat_ids": ["99"], "reply_delay_sec": 0},
             )
 
         self.assertEqual(result["message_id"], 88)
+
+    async def test_get_messages_passes_min_id(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_messages.return_value = [
+            SimpleNamespace(id=51, text="delta", date="2026-03-14", out=False),
+        ]
+
+        messages = await bridge.get_messages("42", limit=10, min_id=50)
+
+        self.assertEqual(messages[0]["id"], 51)
+        self.mock_tg.get_messages.assert_awaited_once_with(entity, limit=10, min_id=50)
 
 
 if __name__ == "__main__":

@@ -9,13 +9,20 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from openclaw_tg_bridge.client import BridgeClient, BridgeError
-from openclaw_tg_bridge.config import load_config, parse_request_overrides, resolve_session_path
+from openclaw_tg_bridge.config import (
+    PolicyStore,
+    load_config,
+    parse_request_overrides,
+    resolve_effective_policy,
+    resolve_session_path,
+)
 
 logger = logging.getLogger(__name__)
 
 # Global bridge client (set in lifespan)
 _bridge: BridgeClient | None = None
 _config: dict | None = None
+_policy_store: PolicyStore | None = None
 
 
 def get_bridge() -> BridgeClient:
@@ -28,6 +35,12 @@ def get_config() -> dict:
     if _config is None:
         raise RuntimeError("Config not loaded")
     return _config
+
+
+def get_policy_store() -> PolicyStore:
+    if _policy_store is None:
+        raise RuntimeError("Policy store not loaded")
+    return _policy_store
 
 
 async def _create_client() -> BridgeClient:
@@ -79,6 +92,8 @@ async def _create_client() -> BridgeClient:
         reply_delay_max_sec=cfg.get("reply_delay_max_sec"),
         allow_chat_ids=cfg["allow_chat_ids"] or None,
         deny_chat_ids=cfg["deny_chat_ids"] or None,
+        write_allow_chat_ids=cfg["write_allow_chat_ids"] or None,
+        write_deny_chat_ids=cfg["write_deny_chat_ids"] or None,
         rpc_timeout_sec=cfg["rpc_timeout_sec"],
         flood_wait_max_sleep_sec=cfg["flood_wait_max_sleep_sec"],
     )
@@ -86,8 +101,9 @@ async def _create_client() -> BridgeClient:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _bridge, _config
+    global _bridge, _config, _policy_store
     _config = load_config()
+    _policy_store = PolicyStore(_config.get("policy_path"))
     try:
         _bridge = await _create_client()
         logger.info("Bridge client connected")
@@ -97,6 +113,7 @@ async def lifespan(app: FastAPI):
             await _bridge.disconnect()
             _bridge = None
         _config = None
+        _policy_store = None
 
 
 app = FastAPI(title="OpenClaw Telegram Bridge", lifespan=lifespan)
@@ -133,11 +150,16 @@ class SendMessageBody(BaseModel):
     reply_to: int | None = None
 
 
+def resolve_request_policy(request: Request) -> dict:
+    overrides = parse_request_overrides(request.headers)
+    return resolve_effective_policy(get_config(), get_policy_store(), overrides)
+
+
 @app.post("/send_message")
 async def send_message(request: Request, body: SendMessageBody):
     bridge = get_bridge()
     try:
-        overrides = parse_request_overrides(request.headers)
+        overrides = resolve_request_policy(request)
         result = await bridge.send_message(
             body.peer,
             body.text,
@@ -171,7 +193,7 @@ async def me():
 async def dialogs(request: Request, limit: int = 20):
     bridge = get_bridge()
     try:
-        overrides = parse_request_overrides(request.headers)
+        overrides = resolve_request_policy(request)
         data = await bridge.get_dialogs(
             limit=min(max(1, limit), 50),
             policy_overrides=overrides,
@@ -187,13 +209,14 @@ async def dialogs(request: Request, limit: int = 20):
 
 
 @app.get("/messages")
-async def messages(request: Request, peer: str | int, limit: int = 20):
+async def messages(request: Request, peer: str | int, limit: int = 20, min_id: int | None = None):
     bridge = get_bridge()
     try:
-        overrides = parse_request_overrides(request.headers)
+        overrides = resolve_request_policy(request)
         data = await bridge.get_messages(
             peer,
             limit=min(max(1, limit), 50),
+            min_id=min_id,
             policy_overrides=overrides,
         )
         return {"messages": data}

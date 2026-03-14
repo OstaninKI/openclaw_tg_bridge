@@ -2,7 +2,7 @@
   "id": "telegram-user-bridge",
   "name": "Unofficial Telegram User Bridge",
   "version": "0.1.0",
-  "description": "Agent tools for live Telegram user account (MTProto via Telethon bridge). Use only with explicit user consent.",
+  "description": "Agent tools for one live Telegram user account with isolated OpenClaw contexts and backend-enforced policies.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -21,25 +21,59 @@
         "default": 25000,
         "description": "HTTP request timeout in milliseconds"
       },
+      "policyProfile": {
+        "type": "string",
+        "description": "Backend policy profile for the legacy single-context mode"
+      },
       "replyDelaySec": {
         "type": "number",
         "default": 2,
-        "description": "Reply delay override enforced by the backend"
+        "description": "Reply delay override enforced by the backend in legacy single-context mode"
       },
       "replyDelayMaxSec": {
         "type": "number",
-        "description": "Optional max delay override enforced by the backend"
+        "description": "Optional max delay override enforced by the backend in legacy single-context mode"
       },
       "allowFrom": {
         "type": "array",
         "items": { "type": "string" },
-        "default": ["*"],
-        "description": "Allowed chat ids/usernames enforced by the backend (* = all)"
+        "description": "Readable chat ids/usernames enforced by the backend in legacy single-context mode"
       },
       "denyFrom": {
         "type": "array",
         "items": { "type": "string" },
-        "description": "Denied chat ids/usernames enforced by the backend"
+        "description": "Denied read chat ids/usernames enforced by the backend in legacy single-context mode"
+      },
+      "writeTo": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Writable chat ids/usernames enforced by the backend in legacy single-context mode; empty means write denied"
+      },
+      "denyWriteTo": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Denied write chat ids/usernames enforced by the backend in legacy single-context mode"
+      },
+      "profiles": {
+        "type": "array",
+        "description": "Optional isolated OpenClaw contexts that register separate tool sets bound to backend policy profiles",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id"],
+          "properties": {
+            "id": { "type": "string", "description": "Stable tool/profile id, for example owner, wife, shared" },
+            "label": { "type": "string", "description": "Human-readable label used in tool descriptions" },
+            "enabled": { "type": "boolean", "default": true },
+            "policyProfile": { "type": "string", "description": "Backend policy profile to use for this context" },
+            "replyDelaySec": { "type": "number" },
+            "replyDelayMaxSec": { "type": "number" },
+            "allowFrom": { "type": "array", "items": { "type": "string" } },
+            "denyFrom": { "type": "array", "items": { "type": "string" } },
+            "writeTo": { "type": "array", "items": { "type": "string" } },
+            "denyWriteTo": { "type": "array", "items": { "type": "string" } }
+          }
+        }
       }
     }
   },
@@ -47,6 +81,7 @@
     "baseUrl": { "label": "Bridge URL", "placeholder": "http://127.0.0.1:8765" },
     "apiToken": { "label": "API Token", "sensitive": true },
     "timeoutMs": { "label": "Timeout (ms)" },
+    "policyProfile": { "label": "Policy profile" },
     "replyDelaySec": { "label": "Reply delay (sec)" },
     "replyDelayMaxSec": { "label": "Reply delay max (sec)" }
   },

@@ -7,11 +7,25 @@
         "enabled": true,
         "config": {
           "baseUrl": "http://127.0.0.1:8765",
+          "apiToken": "change-me",
           "timeoutMs": 25000,
-          "replyDelaySec": 2,
-          "replyDelayMaxSec": 4,
-          "allowFrom": ["*"],
-          "denyFrom": []
+          "profiles": [
+            {
+              "id": "owner",
+              "label": "Owner",
+              "policyProfile": "owner"
+            },
+            {
+              "id": "wife",
+              "label": "Wife",
+              "policyProfile": "wife"
+            },
+            {
+              "id": "shared",
+              "label": "Shared",
+              "policyProfile": "shared"
+            }
+          ]
         }
       }
     }
@@ -19,9 +33,29 @@
   "agents": {
     "list": [
       {
-        "id": "main",
+        "id": "owner-agent",
         "tools": {
-          "allow": ["telegram-user-bridge"]
+          "allow": [
+            "telegram_owner_get_dialogs",
+            "telegram_owner_get_messages",
+            "telegram_owner_send_message",
+            "telegram_shared_get_dialogs",
+            "telegram_shared_get_messages",
+            "telegram_shared_send_message"
+          ]
+        }
+      },
+      {
+        "id": "wife-agent",
+        "tools": {
+          "allow": [
+            "telegram_wife_get_dialogs",
+            "telegram_wife_get_messages",
+            "telegram_wife_send_message",
+            "telegram_shared_get_dialogs",
+            "telegram_shared_get_messages",
+            "telegram_shared_send_message"
+          ]
         }
       }
     ]

@@ -1,4 +1,4 @@
-"""Telethon client wrapper with backend-enforced policy and error mapping."""
+"""Telethon client wrapper with profile-aware access policies and error mapping."""
 
 import asyncio
 import inspect
@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 else:
     TelegramClient = Any
 
-# Telegram message length limit
 MAX_MESSAGE_LENGTH = 4096
 
 
@@ -66,45 +65,84 @@ class BridgeRateLimitError(BridgeError):
 
 
 @dataclass(frozen=True)
-class BridgePolicy:
-    allow: frozenset[str] | None
+class BridgeScope:
+    allow_all: bool
+    allow: frozenset[str]
     deny: frozenset[str]
+
+    def as_allow_input(self) -> list[str]:
+        if self.allow_all:
+            return ["*"]
+        return sorted(self.allow)
+
+    def as_deny_input(self) -> list[str]:
+        return sorted(self.deny)
+
+
+@dataclass(frozen=True)
+class BridgePolicy:
+    read_scope: BridgeScope
+    write_scope: BridgeScope
     reply_delay_sec: float
     reply_delay_max_sec: float | None
 
 
 def _normalize_peer(peer: str | int) -> str:
     """Normalize peer for allow/deny check: username (no @, lowercase) or canonical id."""
-    s = str(peer).strip()
-    if not s:
+    value = str(peer).strip()
+    if not value:
         return ""
-    if s == "*":
+    if value == "*":
         return "*"
-    if s.lower() == "me":
+    if value.lower() == "me":
         return "me"
-    if s.startswith("@"):
-        s = s[1:]
-    if s.lstrip("-").isdigit():
+    if value.startswith("@"):
+        value = value[1:]
+    if value.lstrip("-").isdigit():
         try:
-            return str(int(s))
+            return str(int(value))
         except ValueError:
-            return s
-    return s.lower()
+            return value
+    return value.lower()
 
 
-def _normalize_peer_list(peers: Iterable[str] | None) -> frozenset[str] | None:
-    if peers is None:
-        return None
-    normalized = {_normalize_peer(peer) for peer in peers if _normalize_peer(peer)}
-    if not normalized or "*" in normalized:
-        return None
-    return frozenset(normalized)
+def _normalize_peer_list(peers: Iterable[str] | None) -> frozenset[str]:
+    return frozenset(
+        normalized
+        for peer in (peers or [])
+        if (normalized := _normalize_peer(peer))
+    )
+
+
+def build_scope(
+    allow_peers: list[str] | None,
+    deny_peers: list[str] | None,
+    *,
+    default_allow_all: bool,
+) -> BridgeScope:
+    allow = _normalize_peer_list(allow_peers)
+    deny = _normalize_peer_list(deny_peers)
+
+    if allow_peers is None:
+        allow_all = default_allow_all
+        allow = frozenset()
+    else:
+        allow_all = "*" in allow
+        allow = frozenset(item for item in allow if item != "*")
+
+    return BridgeScope(
+        allow_all=allow_all,
+        allow=allow,
+        deny=deny,
+    )
 
 
 def build_policy(
     *,
-    allow_chat_ids: list[str] | None,
-    deny_chat_ids: list[str] | None,
+    read_allow_chat_ids: list[str] | None,
+    read_deny_chat_ids: list[str] | None,
+    write_allow_chat_ids: list[str] | None,
+    write_deny_chat_ids: list[str] | None,
     reply_delay_sec: float,
     reply_delay_max_sec: float | None,
 ) -> BridgePolicy:
@@ -113,8 +151,8 @@ def build_policy(
     if delay_max is not None and delay_max <= delay:
         delay_max = None
     return BridgePolicy(
-        allow=_normalize_peer_list(allow_chat_ids),
-        deny=_normalize_peer_list(deny_chat_ids) or frozenset(),
+        read_scope=build_scope(read_allow_chat_ids, read_deny_chat_ids, default_allow_all=True),
+        write_scope=build_scope(write_allow_chat_ids, write_deny_chat_ids, default_allow_all=False),
         reply_delay_sec=delay,
         reply_delay_max_sec=delay_max,
     )
@@ -124,10 +162,18 @@ def override_policy(base: BridgePolicy, overrides: dict[str, object] | None = No
     if not overrides:
         return base
     return build_policy(
-        allow_chat_ids=overrides["allow_chat_ids"] if "allow_chat_ids" in overrides else (
-            sorted(base.allow) if base.allow is not None else []
+        read_allow_chat_ids=(
+            overrides["read_allow_chat_ids"] if "read_allow_chat_ids" in overrides else base.read_scope.as_allow_input()
         ),
-        deny_chat_ids=overrides["deny_chat_ids"] if "deny_chat_ids" in overrides else list(base.deny),
+        read_deny_chat_ids=(
+            overrides["read_deny_chat_ids"] if "read_deny_chat_ids" in overrides else base.read_scope.as_deny_input()
+        ),
+        write_allow_chat_ids=(
+            overrides["write_allow_chat_ids"] if "write_allow_chat_ids" in overrides else base.write_scope.as_allow_input()
+        ),
+        write_deny_chat_ids=(
+            overrides["write_deny_chat_ids"] if "write_deny_chat_ids" in overrides else base.write_scope.as_deny_input()
+        ),
         reply_delay_sec=float(overrides.get("reply_delay_sec", base.reply_delay_sec)),
         reply_delay_max_sec=(
             float(overrides["reply_delay_max_sec"])
@@ -137,13 +183,13 @@ def override_policy(base: BridgePolicy, overrides: dict[str, object] | None = No
     )
 
 
-def _peer_matches(candidate_keys: Iterable[str], allow_list: frozenset[str] | None, deny_list: frozenset[str]) -> bool:
+def _scope_matches(candidate_keys: Iterable[str], scope: BridgeScope) -> bool:
     keys = {key for key in candidate_keys if key}
-    if keys & deny_list:
+    if "*" in scope.deny or keys & scope.deny:
         return False
-    if allow_list is None:
+    if scope.allow_all:
         return True
-    return bool(keys & allow_list)
+    return bool(keys & scope.allow)
 
 
 def _build_candidate_keys(
@@ -229,7 +275,7 @@ def _map_telegram_error(exc: BaseException, *, action: str) -> BridgeError:
 
 
 class BridgeClient:
-    """Wraps Telethon client with reply delay, allow/deny, and send lock."""
+    """Wraps Telethon client with reply delay, read/write scopes, and send lock."""
 
     def __init__(
         self,
@@ -239,13 +285,17 @@ class BridgeClient:
         reply_delay_max_sec: float | None = None,
         allow_chat_ids: list[str] | None = None,
         deny_chat_ids: list[str] | None = None,
+        write_allow_chat_ids: list[str] | None = None,
+        write_deny_chat_ids: list[str] | None = None,
         rpc_timeout_sec: float = 30.0,
         flood_wait_max_sleep_sec: float = 3.0,
     ) -> None:
         self._client = client
         self._policy = build_policy(
-            allow_chat_ids=allow_chat_ids,
-            deny_chat_ids=deny_chat_ids,
+            read_allow_chat_ids=allow_chat_ids,
+            read_deny_chat_ids=deny_chat_ids,
+            write_allow_chat_ids=write_allow_chat_ids,
+            write_deny_chat_ids=write_deny_chat_ids,
             reply_delay_sec=reply_delay_sec,
             reply_delay_max_sec=reply_delay_max_sec,
         )
@@ -273,7 +323,6 @@ class BridgeClient:
         return bool(connected)
 
     async def ensure_connected(self) -> bool:
-        """Reconnect if disconnected. Return True if connected."""
         if not await self._is_connected():
             try:
                 await self._client.connect()
@@ -312,9 +361,16 @@ class BridgeClient:
             raise BridgeUnavailableError("Telegram bridge is not connected.")
         return await self._call_telegram(self._client.get_entity, peer, action=action)
 
-    def _check_allowed(self, *, policy: BridgePolicy, candidate_keys: set[str], peer: str | int) -> None:
-        if not _peer_matches(candidate_keys, policy.allow, policy.deny):
-            raise BridgeForbiddenError(f"Peer not allowed: {peer}")
+    def _check_scope(
+        self,
+        *,
+        scope: BridgeScope,
+        candidate_keys: set[str],
+        peer: str | int,
+        action: str,
+    ) -> None:
+        if not _scope_matches(candidate_keys, scope):
+            raise BridgeForbiddenError(f"{action.capitalize()} is not allowed for peer: {peer}")
 
     async def send_message(
         self,
@@ -324,7 +380,6 @@ class BridgeClient:
         *,
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
-        """Send one message with enforced policy."""
         policy = self._resolve_policy(policy_overrides)
         text = (text or "").strip()
         if not text:
@@ -335,10 +390,14 @@ class BridgeClient:
         async with self._send_lock:
             entity = await self._resolve_entity(peer, action="send a message")
             candidate_keys = _build_candidate_keys(peer=peer, entity=entity)
-            self._check_allowed(policy=policy, candidate_keys=candidate_keys, peer=peer)
+            self._check_scope(
+                scope=policy.write_scope,
+                candidate_keys=candidate_keys,
+                peer=peer,
+                action="writing",
+            )
 
-            delay = self._get_delay(policy)
-            await asyncio.sleep(delay)
+            await asyncio.sleep(self._get_delay(policy))
             if not await self.ensure_connected():
                 raise BridgeUnavailableError("Telegram bridge is not connected.")
 
@@ -386,7 +445,7 @@ class BridgeClient:
                 entity=entity,
                 extra_keys=[getattr(dialog, "id", None)],
             )
-            if not _peer_matches(candidate_keys, policy.allow, policy.deny):
+            if not _scope_matches(candidate_keys, policy.read_scope):
                 continue
             title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or ""
             chat_id = getattr(dialog, "id", None) or getattr(entity, "id", None)
@@ -403,19 +462,28 @@ class BridgeClient:
         self,
         peer: str | int,
         limit: int = 20,
+        min_id: int | None = None,
         *,
         policy_overrides: dict[str, object] | None = None,
     ) -> list[dict[str, Any]]:
         policy = self._resolve_policy(policy_overrides)
         entity = await self._resolve_entity(peer, action="read messages")
         candidate_keys = _build_candidate_keys(peer=peer, entity=entity)
-        self._check_allowed(policy=policy, candidate_keys=candidate_keys, peer=peer)
+        self._check_scope(
+            scope=policy.read_scope,
+            candidate_keys=candidate_keys,
+            peer=peer,
+            action="reading",
+        )
 
+        kwargs: dict[str, Any] = {"limit": min(max(1, limit), 50)}
+        if min_id is not None:
+            kwargs["min_id"] = min_id
         messages = await self._call_telegram(
             self._client.get_messages,
             entity,
-            limit=min(max(1, limit), 50),
             action="read messages",
+            **kwargs,
         )
         out = []
         for message in messages:

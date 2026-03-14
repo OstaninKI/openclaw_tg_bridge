@@ -9,21 +9,33 @@ import { Type } from "@sinclair/typebox";
 const BRIDGE_UNAVAILABLE =
   "Telegram bridge is unavailable. Ensure the bridge service is running and session is configured.";
 
+const HEADER_POLICY_PROFILE = "X-OpenClaw-Policy-Profile";
 const HEADER_REPLY_DELAY_SEC = "X-OpenClaw-Reply-Delay-Sec";
 const HEADER_REPLY_DELAY_MAX_SEC = "X-OpenClaw-Reply-Delay-Max-Sec";
 const HEADER_ALLOW_FROM = "X-OpenClaw-Allow-From";
 const HEADER_DENY_FROM = "X-OpenClaw-Deny-From";
+const HEADER_WRITE_TO = "X-OpenClaw-Write-To";
+const HEADER_DENY_WRITE_TO = "X-OpenClaw-Deny-Write-To";
 
 type ToolContent = { content: Array<{ type: "text"; text: string }> };
 
-type BridgeConfig = {
-  baseUrl: string;
-  apiToken?: string;
-  timeoutMs: number;
+type ProfileConfig = {
+  id: string;
+  label: string;
+  policyProfile?: string;
   replyDelaySec?: number;
   replyDelayMaxSec?: number;
   allowFrom?: string[];
   denyFrom?: string[];
+  writeTo?: string[];
+  denyWriteTo?: string[];
+};
+
+type PluginConfig = {
+  baseUrl: string;
+  apiToken?: string;
+  timeoutMs: number;
+  profiles: ProfileConfig[];
 };
 
 type BridgeResponse = {
@@ -44,39 +56,89 @@ function serializePeerList(values: string[] | undefined, fallbackForEmpty: strin
   return values.join(",");
 }
 
-function getConfig(api: { config: Record<string, unknown> }): BridgeConfig {
+function slugifyToolId(value: string): string {
+  const slug = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return slug || "profile";
+}
+
+function normalizeProfile(raw: Record<string, unknown>, fallbackId: string): ProfileConfig | null {
+  const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : fallbackId;
+  if (raw.enabled === false) return null;
+  return {
+    id,
+    label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : id,
+    policyProfile:
+      typeof raw.policyProfile === "string" && raw.policyProfile.trim() ? raw.policyProfile.trim() : undefined,
+    replyDelaySec: typeof raw.replyDelaySec === "number" ? raw.replyDelaySec : undefined,
+    replyDelayMaxSec: typeof raw.replyDelayMaxSec === "number" ? raw.replyDelayMaxSec : undefined,
+    allowFrom: Array.isArray(raw.allowFrom) ? (raw.allowFrom as string[]) : undefined,
+    denyFrom: Array.isArray(raw.denyFrom) ? (raw.denyFrom as string[]) : undefined,
+    writeTo: Array.isArray(raw.writeTo) ? (raw.writeTo as string[]) : undefined,
+    denyWriteTo: Array.isArray(raw.denyWriteTo) ? (raw.denyWriteTo as string[]) : undefined,
+  };
+}
+
+function getConfig(api: { config: Record<string, unknown> }): PluginConfig {
   const entries = (api.config?.plugins as Record<string, unknown>)?.entries as
     | Record<string, Record<string, unknown>>
     | undefined;
   const cfg = entries?.["telegram-user-bridge"]?.config as Record<string, unknown> | undefined;
 
+  const rawProfiles = Array.isArray(cfg?.profiles) ? (cfg?.profiles as Array<Record<string, unknown>>) : [];
+  const profiles = rawProfiles
+    .map((profile, index) => normalizeProfile(profile, `profile_${index + 1}`))
+    .filter((profile): profile is ProfileConfig => profile !== null);
+
+  if (profiles.length === 0) {
+    profiles.push({
+      id: "user",
+      label: "User",
+      policyProfile:
+        typeof cfg?.policyProfile === "string" && (cfg.policyProfile as string).trim()
+          ? (cfg.policyProfile as string).trim()
+          : undefined,
+      replyDelaySec: typeof cfg?.replyDelaySec === "number" ? (cfg.replyDelaySec as number) : undefined,
+      replyDelayMaxSec: typeof cfg?.replyDelayMaxSec === "number" ? (cfg.replyDelayMaxSec as number) : undefined,
+      allowFrom: Array.isArray(cfg?.allowFrom) ? (cfg.allowFrom as string[]) : undefined,
+      denyFrom: Array.isArray(cfg?.denyFrom) ? (cfg.denyFrom as string[]) : undefined,
+      writeTo: Array.isArray(cfg?.writeTo) ? (cfg.writeTo as string[]) : undefined,
+      denyWriteTo: Array.isArray(cfg?.denyWriteTo) ? (cfg.denyWriteTo as string[]) : undefined,
+    });
+  }
+
   return {
     baseUrl: ((cfg?.baseUrl as string) || "http://127.0.0.1:8765").replace(/\/$/, ""),
     apiToken: cfg?.apiToken as string | undefined,
     timeoutMs: (cfg?.timeoutMs as number) || 25000,
-    replyDelaySec: typeof cfg?.replyDelaySec === "number" ? (cfg.replyDelaySec as number) : undefined,
-    replyDelayMaxSec:
-      typeof cfg?.replyDelayMaxSec === "number" ? (cfg.replyDelayMaxSec as number) : undefined,
-    allowFrom: Array.isArray(cfg?.allowFrom) ? (cfg.allowFrom as string[]) : undefined,
-    denyFrom: Array.isArray(cfg?.denyFrom) ? (cfg.denyFrom as string[]) : undefined,
+    profiles,
   };
 }
 
-function buildHeaders(config: BridgeConfig, extraHeaders: Record<string, string> = {}): Record<string, string> {
+function buildHeaders(
+  apiConfig: PluginConfig,
+  profile: ProfileConfig,
+  extraHeaders: Record<string, string> = {}
+): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...extraHeaders };
-  if (config.apiToken) headers["Authorization"] = `Bearer ${config.apiToken}`;
-  if (config.replyDelaySec !== undefined) headers[HEADER_REPLY_DELAY_SEC] = String(config.replyDelaySec);
-  if (config.replyDelayMaxSec !== undefined) headers[HEADER_REPLY_DELAY_MAX_SEC] = String(config.replyDelayMaxSec);
+  if (apiConfig.apiToken) headers["Authorization"] = `Bearer ${apiConfig.apiToken}`;
+  if (profile.policyProfile) headers[HEADER_POLICY_PROFILE] = profile.policyProfile;
+  if (profile.replyDelaySec !== undefined) headers[HEADER_REPLY_DELAY_SEC] = String(profile.replyDelaySec);
+  if (profile.replyDelayMaxSec !== undefined) headers[HEADER_REPLY_DELAY_MAX_SEC] = String(profile.replyDelayMaxSec);
 
-  const allowFrom = serializePeerList(config.allowFrom, "*");
-  const denyFrom = serializePeerList(config.denyFrom, "");
+  const allowFrom = serializePeerList(profile.allowFrom, null);
+  const denyFrom = serializePeerList(profile.denyFrom, "");
+  const writeTo = serializePeerList(profile.writeTo, "");
+  const denyWriteTo = serializePeerList(profile.denyWriteTo, "");
   if (allowFrom !== undefined) headers[HEADER_ALLOW_FROM] = allowFrom;
   if (denyFrom !== undefined) headers[HEADER_DENY_FROM] = denyFrom;
+  if (writeTo !== undefined) headers[HEADER_WRITE_TO] = writeTo;
+  if (denyWriteTo !== undefined) headers[HEADER_DENY_WRITE_TO] = denyWriteTo;
   return headers;
 }
 
 async function fetchBridge(
   api: { config: Record<string, unknown>; logger?: { warn: (s: string) => void } },
+  profile: ProfileConfig,
   path: string,
   options: { method?: string; body?: string; headers?: Record<string, string> } = {}
 ): Promise<BridgeResponse> {
@@ -89,7 +151,7 @@ async function fetchBridge(
     const res = await fetch(url, {
       method: options.method || "GET",
       body: options.body,
-      headers: buildHeaders(config, options.headers),
+      headers: buildHeaders(config, profile, options.headers),
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -137,7 +199,9 @@ function formatBridgeError(res: BridgeResponse): string {
       if (res.error && /retry after/i.test(res.error)) {
         return res.error;
       }
-      return res.error ? `${res.error} Retry after ${res.retryAfter}s.` : `Telegram rate limit hit. Retry after ${res.retryAfter}s.`;
+      return res.error
+        ? `${res.error} Retry after ${res.retryAfter}s.`
+        : `Telegram rate limit hit. Retry after ${res.retryAfter}s.`;
     }
     return res.error || "Telegram rate limit hit. Try again later.";
   }
@@ -164,14 +228,19 @@ interface PluginApi {
   logger?: { warn: (s: string) => void };
 }
 
-export default function register(api: PluginApi) {
+function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
+  const slug = slugifyToolId(profile.id);
+  const prefix = `telegram_${slug}`;
+  const profileLabel = profile.label;
   const optional = { optional: true };
 
   api.registerTool(
     {
-      name: "telegram_user_send_message",
+      name: `${prefix}_send_message`,
       description:
-        "Send a text message from your live Telegram user account (MTProto). Use only when the user explicitly asks to send something to Telegram. Peer can be username (e.g. @durov), chat id, or 'me' for Saved Messages.",
+        `Send a text message from the live Telegram user account using the "${profileLabel}" context. ` +
+        "Use only when the user explicitly asks. Peer can be username (e.g. @durov), chat id, or 'me'. " +
+        "Writing is blocked by default unless this context is explicitly allowed to write.",
       parameters: Type.Object({
         peer: Type.Union([Type.String(), Type.Number()], {
           description: "Username (@name), chat id, or 'me'",
@@ -180,7 +249,7 @@ export default function register(api: PluginApi) {
         reply_to: Type.Optional(Type.Number({ description: "Message id to reply to" })),
       }),
       async execute(_id: string, params: { peer: string | number; text: string; reply_to?: number }) {
-        const res = await fetchBridge(api, "/send_message", {
+        const res = await fetchBridge(api, profile, "/send_message", {
           method: "POST",
           body: JSON.stringify({
             peer: params.peer,
@@ -200,19 +269,32 @@ export default function register(api: PluginApi) {
 
   api.registerTool(
     {
-      name: "telegram_user_get_dialogs",
+      name: `${prefix}_get_dialogs`,
       description:
-        "List recent dialogs (chats) from your live Telegram user account. Use when the user asks to see Telegram chats or find a chat. Requires bridge to be running.",
+        `List recent dialogs visible to the "${profileLabel}" context from the live Telegram user account. ` +
+        "Use when the user asks to see Telegram chats or find a chat.",
       parameters: Type.Object({
-        limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 20, description: "Max number of dialogs" })),
+        limit: Type.Optional(
+          Type.Number({ minimum: 1, maximum: 50, default: 20, description: "Max number of dialogs" })
+        ),
       }),
       async execute(_id: string, params: { limit?: number }) {
-        const res = await fetchBridge(api, `/dialogs?limit=${Math.min(50, Math.max(1, params.limit ?? 20))}`);
+        const res = await fetchBridge(
+          api,
+          profile,
+          `/dialogs?limit=${Math.min(50, Math.max(1, params.limit ?? 20))}`
+        );
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }
-        const dialogs = (res.data as { dialogs?: Array<{ id: unknown; title: string; username?: string }> })?.dialogs ?? [];
-        const lines = dialogs.map((dialog) => `- ${dialog.title || dialog.username || dialog.id} (id: ${dialog.id}${dialog.username ? `, @${dialog.username}` : ""})`);
+        const dialogs =
+          (res.data as { dialogs?: Array<{ id: unknown; title: string; username?: string }> })?.dialogs ?? [];
+        const lines = dialogs.map(
+          (dialog) =>
+            `- ${dialog.title || dialog.username || dialog.id} (id: ${dialog.id}${
+              dialog.username ? `, @${dialog.username}` : ""
+            })`
+        );
         return toolResult(lines.length ? lines.join("\n") : "No dialogs.");
       },
     },
@@ -221,25 +303,38 @@ export default function register(api: PluginApi) {
 
   api.registerTool(
     {
-      name: "telegram_user_get_messages",
+      name: `${prefix}_get_messages`,
       description:
-        "Get recent messages from a Telegram chat. Peer can be username (@name), chat id, or 'me'. Use when the user explicitly asks to read messages from Telegram.",
+        `Get recent messages from a Telegram chat using the "${profileLabel}" context. ` +
+        "Use when the user explicitly asks to read Telegram messages or when a scheduled workflow polls new messages. " +
+        "Use min_id to fetch only newer messages and reduce token usage.",
       parameters: Type.Object({
         peer: Type.Union([Type.String(), Type.Number()], { description: "Username, chat id, or 'me'" }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 20 })),
+        min_id: Type.Optional(Type.Number({ minimum: 1, description: "Only return messages newer than this id" })),
       }),
-      async execute(_id: string, params: { peer: string | number; limit?: number }) {
+      async execute(_id: string, params: { peer: string | number; limit?: number; min_id?: number }) {
         const limit = Math.min(50, Math.max(1, params.limit ?? 20));
         const peer = encodeURIComponent(String(params.peer));
-        const res = await fetchBridge(api, `/messages?peer=${peer}&limit=${limit}`);
+        const minId = typeof params.min_id === "number" ? `&min_id=${Math.max(1, params.min_id)}` : "";
+        const res = await fetchBridge(api, profile, `/messages?peer=${peer}&limit=${limit}${minId}`);
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }
-        const messages = (res.data as { messages?: Array<{ id: unknown; text: string; date?: string; out?: boolean }> })?.messages ?? [];
+        const messages =
+          (res.data as { messages?: Array<{ id: unknown; text: string; date?: string; out?: boolean }> })
+            ?.messages ?? [];
         const lines = messages.map((message) => `[${message.out ? "out" : "in"}] ${message.text || "(no text)"}`);
         return toolResult(lines.length ? lines.join("\n") : "No messages.");
       },
     },
     optional
   );
+}
+
+export default function register(api: PluginApi) {
+  const config = getConfig(api);
+  for (const profile of config.profiles) {
+    registerProfileTools(api, profile);
+  }
 }
