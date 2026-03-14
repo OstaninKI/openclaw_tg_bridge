@@ -270,6 +270,19 @@ def _resolve_chat_type(entity: Any | None) -> str:
     return "unknown"
 
 
+def _is_channel_like(entity: Any | None) -> bool:
+    return bool(getattr(entity, "broadcast", False) or getattr(entity, "megagroup", False))
+
+
+def _is_basic_group(entity: Any | None) -> bool:
+    return not _is_channel_like(entity) and getattr(entity, "title", None) is not None
+
+
+def _is_basic_group_admin_participant(participant: Any) -> bool:
+    participant_type = type(participant).__name__.lower()
+    return "admin" in participant_type or "creator" in participant_type
+
+
 def _build_sender_lookup(result: Any) -> dict[str, Any]:
     lookup: dict[str, Any] = {}
     for collection_name in ("users", "chats"):
@@ -662,6 +675,10 @@ class BridgeClient:
         await asyncio.sleep(self._get_delay(policy))
         if not await self.ensure_connected():
             raise BridgeUnavailableError("Telegram bridge is not connected.")
+
+    def _require_channel_like(self, entity: Any, *, action: str) -> None:
+        if not _is_channel_like(entity):
+            raise BridgeValidationError(f"{action.capitalize()} is supported only for channels and supergroups.")
 
     async def send_message(
         self,
@@ -1454,25 +1471,60 @@ class BridgeClient:
             action="reading",
             scope=policy.read_scope,
         )
-        types = _telethon_types()
-        admins = await self._call_telegram(
-            self._client.get_participants,
-            entity,
-            limit=min(max(1, limit), 200),
-            filter=types.ChannelParticipantsAdmins(),
-            action="list admins",
-        )
-        result: list[dict[str, Any]] = []
-        for admin in admins:
-            result.append(
-                {
-                    "id": getattr(admin, "id", None),
-                    "username": getattr(admin, "username", None),
-                    "title": _entity_display_name(admin),
-                    "bot": bool(getattr(admin, "bot", False)),
-                }
+        limit = min(max(1, limit), 200)
+        if _is_channel_like(entity):
+            types = _telethon_types()
+            admins = await self._call_telegram(
+                self._client.get_participants,
+                entity,
+                limit=limit,
+                filter=types.ChannelParticipantsAdmins(),
+                action="list admins",
             )
-        return result
+            result: list[dict[str, Any]] = []
+            for admin in admins:
+                result.append(
+                    {
+                        "id": getattr(admin, "id", None),
+                        "username": getattr(admin, "username", None),
+                        "title": _entity_display_name(admin),
+                        "bot": bool(getattr(admin, "bot", False)),
+                    }
+                )
+            return result
+        if _is_basic_group(entity):
+            functions = _telethon_functions()
+            full = await self._call_telegram(
+                self._client.__call__,
+                functions.messages.GetFullChatRequest(chat_id=getattr(entity, "id", None)),
+                action="list admins",
+            )
+            full_chat = getattr(full, "full_chat", None)
+            participants = getattr(getattr(full_chat, "participants", None), "participants", None) or []
+            users_by_id = {
+                getattr(user, "id", None): user
+                for user in (getattr(full, "users", None) or [])
+                if getattr(user, "id", None) is not None
+            }
+            result = []
+            for participant in participants:
+                if not _is_basic_group_admin_participant(participant):
+                    continue
+                user = users_by_id.get(getattr(participant, "user_id", None))
+                if user is None:
+                    continue
+                result.append(
+                    {
+                        "id": getattr(user, "id", None),
+                        "username": getattr(user, "username", None),
+                        "title": _entity_display_name(user),
+                        "bot": bool(getattr(user, "bot", False)),
+                    }
+                )
+                if len(result) >= limit:
+                    break
+            return result
+        raise BridgeValidationError("Admin listing is supported only for groups, supergroups, and channels.")
 
     async def get_banned_users(
         self,
@@ -1488,6 +1540,7 @@ class BridgeClient:
             action="reading",
             scope=policy.read_scope,
         )
+        self._require_channel_like(entity, action="listing banned users")
         types = _telethon_types()
         users = await self._call_telegram(
             self._client.get_participants,
@@ -1525,8 +1578,21 @@ class BridgeClient:
             action="writing",
             scope=policy.write_scope,
         )
-        types = _telethon_types()
         functions = _telethon_functions()
+        if _is_basic_group(entity):
+            await self._call_telegram(
+                self._client.__call__,
+                functions.messages.EditChatAdminRequest(
+                    chat_id=getattr(entity, "id", None),
+                    user_id=user,
+                    is_admin=True,
+                ),
+                action="promote an admin",
+            )
+            return {"ok": True}
+        if not _is_channel_like(entity):
+            raise BridgeValidationError("Admin promotion is supported only for groups, supergroups, and channels.")
+        types = _telethon_types()
         rights = types.ChatAdminRights(
             change_info=True,
             post_messages=True,
@@ -1570,8 +1636,21 @@ class BridgeClient:
             action="writing",
             scope=policy.write_scope,
         )
-        types = _telethon_types()
         functions = _telethon_functions()
+        if _is_basic_group(entity):
+            await self._call_telegram(
+                self._client.__call__,
+                functions.messages.EditChatAdminRequest(
+                    chat_id=getattr(entity, "id", None),
+                    user_id=user,
+                    is_admin=False,
+                ),
+                action="demote an admin",
+            )
+            return {"ok": True}
+        if not _is_channel_like(entity):
+            raise BridgeValidationError("Admin demotion is supported only for groups, supergroups, and channels.")
+        types = _telethon_types()
         rights = types.ChatAdminRights(
             change_info=False,
             post_messages=False,
@@ -1616,8 +1695,9 @@ class BridgeClient:
             action="writing",
             scope=policy.write_scope,
         )
-        types = _telethon_types()
+        self._require_channel_like(entity, action="banning users")
         functions = _telethon_functions()
+        types = _telethon_types()
         rights = types.ChatBannedRights(
             until_date=until_date,
             view_messages=True,
@@ -1662,8 +1742,9 @@ class BridgeClient:
             action="writing",
             scope=policy.write_scope,
         )
-        types = _telethon_types()
+        self._require_channel_like(entity, action="unbanning users")
         functions = _telethon_functions()
+        types = _telethon_types()
         rights = types.ChatBannedRights(
             until_date=None,
             view_messages=False,
@@ -1792,6 +1873,7 @@ class BridgeClient:
             action="reading",
             scope=policy.read_scope,
         )
+        self._require_channel_like(entity, action="reading recent admin actions")
         functions = _telethon_functions()
         result = await self._call_telegram(
             self._client.__call__,

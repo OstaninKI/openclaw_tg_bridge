@@ -904,6 +904,26 @@ function registerDmChannel(api: PluginApi): void {
         resolveDmChannelAccountFromConfig(cfg, pluginConfig, accountId),
       defaultAccountId: (cfg: Record<string, unknown>) =>
         getDmChannelConfigFromConfig(cfg, pluginConfig)?.defaultAccountId ?? "default",
+      inspectAccount: (cfg: Record<string, unknown>, accountId?: string) => {
+        const channelConfig = getDmChannelConfigFromConfig(cfg, pluginConfig);
+        const account = resolveDmChannelAccountFromConfig(cfg, pluginConfig, accountId);
+        return {
+          ok: true,
+          accountId: account.accountId,
+          defaultAccountId: account.defaultAccountId,
+          configured: channelConfig !== null,
+          enabled: account.enabled,
+          label: account.label,
+          baseUrl: account.baseUrl,
+          timeoutMs: account.timeoutMs,
+          pollTimeoutMs: account.pollTimeoutMs,
+          pollIntervalMs: account.pollIntervalMs,
+          strictPeerBindings: account.strictPeerBindings,
+          policyProfile: account.policyProfile ?? null,
+          allowFrom: account.allowFrom ?? [],
+          writeTo: account.writeTo ?? [],
+        };
+      },
     },
     outbound: {
       deliveryMode: "direct",
@@ -1408,9 +1428,12 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
     api.registerTool(
       {
         name: `${prefix}_promote_admin`,
-        description: `Promote a Telegram user to admin using the "${profileLabel}" context.`,
+        description:
+          `Promote a Telegram user to admin in a group, supergroup, or channel using the "${profileLabel}" context.`,
         parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
+          peer: Type.Union([Type.String(), Type.Number()], {
+            description: "Group, supergroup, or channel username or id",
+          }),
           user_peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
           title: Type.Optional(Type.String()),
         }),
@@ -1433,9 +1456,12 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
     api.registerTool(
       {
         name: `${prefix}_demote_admin`,
-        description: `Demote a Telegram admin using the "${profileLabel}" context.`,
+        description:
+          `Demote a Telegram admin in a group, supergroup, or channel using the "${profileLabel}" context.`,
         parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
+          peer: Type.Union([Type.String(), Type.Number()], {
+            description: "Group, supergroup, or channel username or id",
+          }),
           user_peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
         }),
         async execute(_id: string, params: { peer: string | number; user_peer: string | number }) {
@@ -1453,9 +1479,11 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
     api.registerTool(
       {
         name: `${prefix}_ban_user`,
-        description: `Ban a Telegram user from a group/channel using the "${profileLabel}" context.`,
+        description:
+          `Ban a Telegram user from a supergroup or channel using the "${profileLabel}" context. ` +
+          "Basic groups are not supported for this flow.",
         parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
+          peer: Type.Union([Type.String(), Type.Number()], { description: "Supergroup or channel username or id" }),
           user_peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
           until_date: Type.Optional(Type.Number({ description: "Optional unix timestamp until which the ban applies" })),
         }),
@@ -1478,9 +1506,11 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
     api.registerTool(
       {
         name: `${prefix}_unban_user`,
-        description: `Unban a Telegram user from a group/channel using the "${profileLabel}" context.`,
+        description:
+          `Unban a Telegram user from a supergroup or channel using the "${profileLabel}" context. ` +
+          "Basic groups are not supported for this flow.",
         parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
+          peer: Type.Union([Type.String(), Type.Number()], { description: "Supergroup or channel username or id" }),
           user_peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
         }),
         async execute(_id: string, params: { peer: string | number; user_peer: string | number }) {
@@ -1846,10 +1876,12 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
     {
       name: `${prefix}_get_admins`,
       description:
-        `List Telegram chat admins visible to the "${profileLabel}" context. ` +
+        `List Telegram group, supergroup, or channel admins visible to the "${profileLabel}" context. ` +
         "Use this only when the user explicitly asks about administrators.",
       parameters: Type.Object({
-        peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
+        peer: Type.Union([Type.String(), Type.Number()], {
+          description: "Group, supergroup, or channel username or id",
+        }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200, default: 100 })),
       }),
       async execute(_id: string, params: { peer: string | number; limit?: number }) {
@@ -1946,9 +1978,11 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
   api.registerTool(
     {
       name: `${prefix}_get_banned_users`,
-      description: `List banned users in a group/channel using the "${profileLabel}" context.`,
+      description:
+        `List banned users in a supergroup or channel using the "${profileLabel}" context. ` +
+        "Basic groups are not supported for this flow.",
       parameters: Type.Object({
-        peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
+        peer: Type.Union([Type.String(), Type.Number()], { description: "Supergroup or channel username or id" }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200, default: 100 })),
         offset: Type.Optional(Type.Number({ minimum: 0, default: 0 })),
       }),
@@ -2092,9 +2126,11 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
   api.registerTool(
     {
       name: `${prefix}_get_recent_actions`,
-      description: `Get recent admin actions in a Telegram group/channel using the "${profileLabel}" context.`,
+      description:
+        `Get recent admin actions in a Telegram supergroup or channel using the "${profileLabel}" context. ` +
+        "Basic groups are not supported for this flow.",
       parameters: Type.Object({
-        peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
+        peer: Type.Union([Type.String(), Type.Number()], { description: "Supergroup or channel username or id" }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 20 })),
       }),
       async execute(_id: string, params: { peer: string | number; limit?: number }) {

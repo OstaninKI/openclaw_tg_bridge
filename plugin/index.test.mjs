@@ -416,7 +416,24 @@ test("plugin registers DM channel and channel outbound uses backend send_message
     "channels.telegram-user-bridge",
     "plugins.entries.telegram-user-bridge",
   ]);
+  assert.equal(typeof api.channels[0].config.inspectAccount, "function");
   assert.equal(typeof api.channels[0].gateway.stopAccount, "function");
+  assert.deepEqual(api.channels[0].config.inspectAccount(api.config, "default"), {
+    ok: true,
+    accountId: "default",
+    defaultAccountId: "default",
+    configured: true,
+    enabled: true,
+    label: "default",
+    baseUrl: "http://127.0.0.1:8765",
+    timeoutMs: 30000,
+    pollTimeoutMs: 25000,
+    pollIntervalMs: 1500,
+    strictPeerBindings: true,
+    policyProfile: "dm_inbox",
+    allowFrom: ["123"],
+    writeTo: ["123"],
+  });
 
   let capturedUrl = "";
   let capturedInit = undefined;

@@ -51,8 +51,8 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `download_media`
   - `media_info`
   - `get_participants`
-  - `get_admins`
-  - `get_banned_users`
+  - `get_admins` for groups, supergroups, and channels
+  - `get_banned_users` for supergroups/channels
   - `list_contacts`
   - `search_contacts`
   - `add_contact`
@@ -65,14 +65,14 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `invite_to_group`
   - `join_chat_by_link`
   - `get_invite_link`
-  - `promote_admin`
-  - `demote_admin`
-  - `ban_user`
-  - `unban_user`
+  - `promote_admin` for groups, supergroups, and channels
+  - `demote_admin` for groups, supergroups, and channels
+  - `ban_user` for supergroups/channels
+  - `unban_user` for supergroups/channels
   - `get_chat`
   - `get_history`
   - `search_public_chats`
-  - `get_recent_actions`
+  - `get_recent_actions` for supergroups/channels
   - `get_pinned_messages`
   - `send_reaction`
   - `remove_reaction`
@@ -319,12 +319,12 @@ Interactive profiles also expose the richer Telegram surface. Tool names follow 
   - `telegram_owner_dm_join_chat_by_link`
   - `telegram_owner_dm_get_invite_link`
   - `telegram_owner_dm_get_participants`
-  - `telegram_owner_dm_get_admins`
-  - `telegram_owner_dm_get_banned_users`
-  - `telegram_owner_dm_promote_admin`
-  - `telegram_owner_dm_demote_admin`
-  - `telegram_owner_dm_ban_user`
-  - `telegram_owner_dm_unban_user`
+  - `telegram_owner_dm_get_admins` for groups, supergroups, and channels
+  - `telegram_owner_dm_promote_admin` for groups, supergroups, and channels
+  - `telegram_owner_dm_demote_admin` for groups, supergroups, and channels
+  - `telegram_owner_dm_get_banned_users` for supergroups/channels
+  - `telegram_owner_dm_ban_user` for supergroups/channels
+  - `telegram_owner_dm_unban_user` for supergroups/channels
   - `telegram_owner_dm_leave_chat`
 - reading/analytics:
   - `telegram_owner_dm_get_chat`
@@ -332,7 +332,7 @@ Interactive profiles also expose the richer Telegram surface. Tool names follow 
   - `telegram_owner_dm_get_history`
   - `telegram_owner_dm_search_messages`
   - `telegram_owner_dm_search_public_chats`
-  - `telegram_owner_dm_get_recent_actions`
+  - `telegram_owner_dm_get_recent_actions` for supergroups/channels
   - `telegram_owner_dm_get_pinned_messages`
   - `telegram_owner_dm_send_reaction`
   - `telegram_owner_dm_remove_reaction`
@@ -662,7 +662,7 @@ Recommended minimal manual checks after deployment:
 7. block and unblock one test user;
 8. list participants/admins on one group or channel;
 9. send/remove a reaction and fetch the reaction list;
-10. if you rely on admin workflows, test promote/demote and ban/unban on a disposable group;
+10. if you rely on admin workflows, test promote/demote on a disposable basic group and on a disposable supergroup; test ban/unban and recent admin actions on a disposable supergroup or channel;
 11. if you rely on onboarding flows, test invite link generation and join-by-link on a disposable group;
 12. verify that a second backend process refuses to start because `TELEGRAM_LOCK_PATH` is already held.
 
