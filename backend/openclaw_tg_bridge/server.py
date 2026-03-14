@@ -532,8 +532,34 @@ async def dialogs(request: Request, limit: int = 20):
         raise HTTPException(status_code=502, detail="Request failed")
 
 
+@app.get("/topics")
+async def topics(request: Request, peer: str | int, limit: int = 20):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        data = await bridge.list_topics(
+            peer,
+            limit=min(max(1, limit), 100),
+            policy_overrides=overrides,
+        )
+        return {"topics": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("list_topics failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
 @app.get("/messages")
-async def messages(request: Request, peer: str | int, limit: int = 20, min_id: int | None = None):
+async def messages(
+    request: Request,
+    peer: str | int,
+    limit: int = 20,
+    min_id: int | None = None,
+    topic_id: int | None = None,
+):
     bridge = get_bridge()
     try:
         overrides = await resolve_request_policy(request)
@@ -541,6 +567,7 @@ async def messages(request: Request, peer: str | int, limit: int = 20, min_id: i
             peer,
             limit=min(max(1, limit), 50),
             min_id=min_id,
+            topic_id=topic_id,
             policy_overrides=overrides,
         )
         return {"messages": data}

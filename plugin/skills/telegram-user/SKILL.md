@@ -30,8 +30,8 @@ The same Telegram account may be exposed to multiple OpenClaw contexts, for exam
 
 ## Tools
 
-- Interactive DM tools: `telegram_<context>_send_message`, `telegram_<context>_get_dialogs`, `telegram_<context>_get_messages`
-- Source polling tools: `telegram_<context>_list_sources`, `telegram_<context>_sync_sources`, `telegram_<context>_get_messages`
+- Interactive DM tools: `telegram_<context>_send_message`, `telegram_<context>_get_dialogs`, `telegram_<context>_list_topics`, `telegram_<context>_get_messages`
+- Source polling tools: `telegram_<context>_list_sources`, `telegram_<context>_sync_sources`, `telegram_<context>_list_topics`, `telegram_<context>_get_messages`
 
 Examples of context ids: `owner_dm`, `wife_dm`, `sources_ro`.
 
@@ -39,7 +39,49 @@ Examples of context ids: `owner_dm`, `wife_dm`, `sources_ro`.
 
 - For scheduled checks, always prefer `telegram_<context>_get_messages` with `min_id`, so only new messages are fetched since the last checkpoint.
 - For `sources_ro`, call `telegram_<context>_list_sources` or `telegram_<context>_sync_sources` before first use or after the Telegram account joins new groups/channels.
-- Store checkpoints per `{context, peer}`. If forum topics matter, keep checkpoints per `{context, peer, topic_id}`.
+- Checkpoints are owned by OpenClaw, not by the bridge. Store them in OpenClaw per `{context, peer}` and, for forum topics, per `{context, peer, topic_id}`.
 - Keep `limit` small and summarize deltas instead of rereading entire chats.
 - Messages now include sender and topic metadata; use that instead of rereading the full chat when preparing summaries.
+- For forum chats, call `telegram_<context>_list_topics` first. Its `topic_id` is the thread root message id that must be passed back into `telegram_<context>_get_messages`.
 - Shared groups/channels should be processed through a dedicated read-only source context, separate from personal DM contexts.
+
+## Ready-made scheduler patterns
+
+### 1. Delta summary for a regular group or channel
+
+Use this when the user wants something like "summarize the last 24h from source X" or "give me what's new since the last run".
+
+1. Read the OpenClaw checkpoint for `{context, peer}`.
+2. Call `telegram_<context>_get_messages(peer=..., min_id=checkpoint, limit=...)`.
+3. If no messages are returned, report that there is no new content and keep the checkpoint unchanged.
+4. Summarize only the returned delta.
+5. Update the OpenClaw checkpoint to the maximum returned message id.
+
+### 2. Delta summary for one forum topic
+
+Use this when the user wants one specific thread inside a forum chat.
+
+1. Call `telegram_<context>_list_topics(peer=...)`.
+2. Find the needed topic and take its `topic_id`.
+3. Read the OpenClaw checkpoint for `{context, peer, topic_id}`.
+4. Call `telegram_<context>_get_messages(peer=..., topic_id=..., min_id=checkpoint, limit=...)`.
+5. Summarize only the returned messages for that one topic.
+6. Update the OpenClaw checkpoint to the maximum returned message id for that topic.
+
+### 3. Forum-wide scheduled digest
+
+Use this when the user wants "what happened in forum chat X" without naming one topic.
+
+1. Call `telegram_<context>_list_topics(peer=...)`.
+2. For each topic, load its OpenClaw checkpoint `{context, peer, topic_id}`.
+3. Call `telegram_<context>_get_messages` separately per topic with a small `limit`.
+4. Skip topics with no new messages.
+5. Produce a digest grouped by topic title, and mention the message authors from returned metadata.
+6. Update only the checkpoints for topics that actually produced new messages.
+
+### 4. What the bridge should not own
+
+- Do not ask the bridge to store checkpoints.
+- Do not reread full forum histories on every run.
+- Do not mix topic checkpoints with whole-chat checkpoints.
+- Do not use DM contexts for scheduled source digestion if `sources_ro` is available.

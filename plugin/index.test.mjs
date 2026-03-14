@@ -82,7 +82,7 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   assert.match(result.content[0].text, /Message sent/);
 });
 
-test("plugin passes min_id for incremental polling", async () => {
+test("plugin passes min_id and topic_id for incremental polling", async () => {
   const api = createApi({
     plugins: {
       entries: {
@@ -106,9 +106,9 @@ test("plugin passes min_id for incremental polling", async () => {
   };
 
   const messagesTool = getTool(api, "telegram_shared_get_messages");
-  await messagesTool.execute("1", { peer: -1001, limit: 10, min_id: 77 });
+  await messagesTool.execute("1", { peer: -1001, limit: 10, min_id: 77, topic_id: 900 });
 
-  assert.equal(capturedUrl, "http://127.0.0.1:8765/messages?peer=-1001&limit=10&min_id=77");
+  assert.equal(capturedUrl, "http://127.0.0.1:8765/messages?peer=-1001&limit=10&min_id=77&topic_id=900");
 });
 
 test("sources_ro profile is read-only and exposes source inventory tools", async () => {
@@ -128,6 +128,7 @@ test("sources_ro profile is read-only and exposes source inventory tools", async
   assert.equal(getTool(api, "telegram_sources_send_message"), undefined);
   assert.ok(getTool(api, "telegram_sources_list_sources"));
   assert.ok(getTool(api, "telegram_sources_sync_sources"));
+  assert.ok(getTool(api, "telegram_sources_list_topics"));
   assert.ok(getTool(api, "telegram_sources_get_messages"));
 
   let capturedUrl = "";
@@ -152,6 +153,42 @@ test("sources_ro profile is read-only and exposes source inventory tools", async
   assert.equal(capturedUrl, "http://127.0.0.1:8765/sources?refresh=true");
   assert.equal(capturedInit.method, "GET");
   assert.match(result.content[0].text, /News/);
+});
+
+test("plugin lists forum topics and formats topic fetch ids", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "sources", mode: "sources_ro", policyProfile: "sources_ro" }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  let capturedUrl = "";
+  globalThis.fetch = async (url) => {
+    capturedUrl = url;
+    return new Response(
+      JSON.stringify({
+        topics: [{ id: 12, topic_id: 900, title: "Releases", unread_count: 2, pinned: true }],
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }
+    );
+  };
+
+  const topicsTool = getTool(api, "telegram_sources_list_topics");
+  const result = await topicsTool.execute("1", { peer: -1001, limit: 10 });
+
+  assert.equal(capturedUrl, "http://127.0.0.1:8765/topics?peer=-1001&limit=10");
+  assert.match(result.content[0].text, /Releases/);
+  assert.match(result.content[0].text, /topic_id: 900/);
 });
 
 test("plugin formats richer message metadata for source polling", async () => {

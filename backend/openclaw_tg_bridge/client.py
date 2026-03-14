@@ -134,6 +134,12 @@ def _entity_display_name(entity: Any | None) -> str | None:
     return None
 
 
+def _telethon_functions() -> Any:
+    from telethon import functions
+
+    return functions
+
+
 def _isoformat(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -157,8 +163,20 @@ def _message_topic_id(message: Any) -> int | None:
     return None
 
 
-def _message_sender_name(message: Any) -> str | None:
-    sender = getattr(message, "sender", None)
+def _extract_peer_id(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if value is None:
+        return None
+    for attr in ("user_id", "chat_id", "channel_id", "id"):
+        candidate = getattr(value, attr, None)
+        if isinstance(candidate, int):
+            return candidate
+    return None
+
+
+def _message_sender_name(message: Any, *, sender: Any | None = None) -> str | None:
+    sender = sender or getattr(message, "sender", None)
     if sender is not None:
         sender_name = _entity_display_name(sender)
         if sender_name:
@@ -185,24 +203,110 @@ def _resolve_chat_type(entity: Any | None) -> str:
     return "unknown"
 
 
-def _serialize_message(message: Any, *, entity: Any | None = None) -> dict[str, Any]:
+def _build_sender_lookup(result: Any) -> dict[str, Any]:
+    lookup: dict[str, Any] = {}
+    for collection_name in ("users", "chats"):
+        collection = getattr(result, collection_name, None) or []
+        for item in collection:
+            normalized = _normalize_peer(getattr(item, "id", None))
+            if normalized:
+                lookup[normalized] = item
+    return lookup
+
+
+def _resolve_message_sender(message: Any, sender_lookup: dict[str, Any] | None = None) -> Any | None:
+    sender = getattr(message, "sender", None)
+    if sender is not None or not sender_lookup:
+        return sender
+    sender_id = getattr(message, "sender_id", None)
+    if not isinstance(sender_id, int):
+        sender_id = _extract_peer_id(getattr(message, "from_id", None))
+    normalized = _normalize_peer(sender_id)
+    if not normalized:
+        return None
+    return sender_lookup.get(normalized)
+
+
+def _serialize_message(
+    message: Any,
+    *,
+    entity: Any | None = None,
+    sender_lookup: dict[str, Any] | None = None,
+    topic_id_override: int | None = None,
+) -> dict[str, Any]:
+    sender = _resolve_message_sender(message, sender_lookup)
     chat_entity = entity or getattr(message, "chat", None) or getattr(message, "sender", None)
     date_value = getattr(message, "date", None)
+    sender_id = getattr(message, "sender_id", None)
+    if not isinstance(sender_id, int):
+        sender_id = _extract_peer_id(getattr(message, "from_id", None))
+    topic_id = topic_id_override if isinstance(topic_id_override, int) and topic_id_override > 0 else _message_topic_id(message)
     return {
         "id": getattr(message, "id", None),
         "text": getattr(message, "text", None) or "",
         "date": _isoformat(date_value),
         "date_unix": int(date_value.timestamp()) if isinstance(date_value, datetime) else 0,
         "out": getattr(message, "out", None),
-        "sender_id": getattr(message, "sender_id", None),
-        "sender_name": _message_sender_name(message),
-        "sender_username": getattr(getattr(message, "sender", None), "username", None),
+        "sender_id": sender_id,
+        "sender_name": _message_sender_name(message, sender=sender),
+        "sender_username": getattr(sender, "username", None) or getattr(getattr(message, "sender", None), "username", None),
         "chat_id": getattr(chat_entity, "id", None),
         "chat_title": _entity_display_name(chat_entity),
         "chat_username": getattr(chat_entity, "username", None),
         "chat_type": _resolve_chat_type(chat_entity),
-        "topic_id": _message_topic_id(message),
+        "topic_id": topic_id,
         "reply_to_message_id": getattr(message, "reply_to_msg_id", None),
+    }
+
+
+def _serialize_messages(
+    messages: Iterable[Any],
+    *,
+    entity: Any | None = None,
+    sender_lookup: dict[str, Any] | None = None,
+    skip_outbound: bool = False,
+    topic_id_override: int | None = None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for message in reversed(list(messages)):
+        if message is None or getattr(message, "id", None) is None:
+            continue
+        if skip_outbound and getattr(message, "out", False):
+            continue
+        out.append(
+            _serialize_message(
+                message,
+                entity=entity,
+                sender_lookup=sender_lookup,
+                topic_id_override=topic_id_override,
+            )
+        )
+    return out
+
+
+def _serialize_topic(topic: Any) -> dict[str, Any] | None:
+    title = getattr(topic, "title", None)
+    if not isinstance(title, str) or not title.strip():
+        return None
+    topic_id = getattr(topic, "top_message", None)
+    if not isinstance(topic_id, int):
+        topic_id = getattr(topic, "id", None)
+    if not isinstance(topic_id, int):
+        return None
+    return {
+        "id": getattr(topic, "id", None),
+        "topic_id": topic_id,
+        "title": title.strip(),
+        "icon_color": getattr(topic, "icon_color", None),
+        "icon_emoji_id": getattr(topic, "icon_emoji_id", None),
+        "closed": bool(getattr(topic, "closed", False)),
+        "hidden": bool(getattr(topic, "hidden", False)),
+        "pinned": bool(getattr(topic, "pinned", False)),
+        "unread_count": getattr(topic, "unread_count", None),
+        "unread_mentions_count": getattr(topic, "unread_mentions_count", None),
+        "unread_reactions_count": getattr(topic, "unread_reactions_count", None),
+        "from_id": _extract_peer_id(getattr(topic, "from_id", None)),
+        "date": _isoformat(getattr(topic, "date", None)),
     }
 
 
@@ -600,18 +704,54 @@ class BridgeClient:
             action="read incoming direct messages",
             **kwargs,
         )
-        out = []
-        for message in reversed(list(messages)):
-            if message is None or getattr(message, "out", False):
-                continue
-            out.append(_serialize_message(message, entity=entity))
-        return out
+        return _serialize_messages(messages, entity=entity, skip_outbound=True)
+
+    async def list_topics(
+        self,
+        peer: str | int,
+        limit: int = 20,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        entity = await self._resolve_entity(peer, action="list forum topics")
+        candidate_keys = _build_candidate_keys(peer=peer, entity=entity)
+        self._check_scope(
+            scope=policy.read_scope,
+            candidate_keys=candidate_keys,
+            peer=peer,
+            action="reading",
+        )
+        if not getattr(entity, "forum", False):
+            raise BridgeValidationError("Telegram peer does not support forum topics.")
+
+        functions = _telethon_functions()
+        request = functions.messages.GetForumTopicsRequest(
+            peer=entity,
+            offset_date=None,
+            offset_id=0,
+            offset_topic=0,
+            limit=min(max(1, limit), 100),
+            q="",
+        )
+        result = await self._call_telegram(
+            self._client.__call__,
+            request,
+            action="list forum topics",
+        )
+        topics: list[dict[str, Any]] = []
+        for topic in getattr(result, "topics", []) or []:
+            serialized = _serialize_topic(topic)
+            if serialized is not None:
+                topics.append(serialized)
+        return topics
 
     async def get_messages(
         self,
         peer: str | int,
         limit: int = 20,
         min_id: int | None = None,
+        topic_id: int | None = None,
         *,
         policy_overrides: dict[str, object] | None = None,
     ) -> list[dict[str, Any]]:
@@ -625,6 +765,35 @@ class BridgeClient:
             action="reading",
         )
 
+        if topic_id is not None:
+            if topic_id < 1:
+                raise BridgeValidationError("topic_id must be >= 1.")
+            if not getattr(entity, "forum", False):
+                raise BridgeValidationError("Telegram peer does not support forum topics.")
+            functions = _telethon_functions()
+            request = functions.messages.GetRepliesRequest(
+                peer=entity,
+                msg_id=topic_id,
+                offset_id=0,
+                offset_date=None,
+                add_offset=0,
+                limit=min(max(1, limit), 50),
+                max_id=0,
+                min_id=max(0, min_id or 0),
+                hash=0,
+            )
+            result = await self._call_telegram(
+                self._client.__call__,
+                request,
+                action="read topic messages",
+            )
+            return _serialize_messages(
+                getattr(result, "messages", []) or [],
+                entity=entity,
+                sender_lookup=_build_sender_lookup(result),
+                topic_id_override=topic_id,
+            )
+
         kwargs: dict[str, Any] = {"limit": min(max(1, limit), 50)}
         if min_id is not None:
             kwargs["min_id"] = min_id
@@ -634,12 +803,7 @@ class BridgeClient:
             action="read messages",
             **kwargs,
         )
-        out = []
-        for message in reversed(list(messages)):
-            if message is None:
-                continue
-            out.append(_serialize_message(message, entity=entity))
-        return out
+        return _serialize_messages(messages, entity=entity)
 
     async def disconnect(self) -> None:
         if await self._is_connected():

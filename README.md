@@ -35,6 +35,9 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - longer waits return `429` with `Retry-After`;
   - no hidden long sleeps after the OpenClaw-side timeout.
 - `get_messages(min_id=...)` for incremental polling and token savings.
+- Topic-aware forum helpers:
+  - `list_topics(peer)` for Telegram forum chats
+  - `get_messages(peer, topic_id=...)` for one specific forum thread
 - Message reads are returned in ascending order (`oldest -> newest`) for safer checkpoint updates.
 - Richer message metadata for summaries:
   - `sender_id`
@@ -42,7 +45,7 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `chat_id`
   - `chat_title`
   - `chat_username`
-  - `topic_id`
+  - `topic_id` (forum thread root/top message id)
   - `reply_to_message_id`
 - Auto-discovery of sourceable dialogs for `sources_ro`:
   - channels
@@ -52,6 +55,7 @@ The isolation boundary is **not** the Telegram account. It is the combination of
 - Read-only `sources_ro` toolset:
   - `list_sources`
   - `sync_sources`
+  - `list_topics`
   - `get_messages`
 - Event-driven inbound DM channel:
   - backend long-lived Telethon listener
@@ -331,10 +335,12 @@ Give each OpenClaw agent only its own tools:
         "tools": {
           "allow": [
             "telegram_owner_dm_get_dialogs",
+            "telegram_owner_dm_list_topics",
             "telegram_owner_dm_get_messages",
             "telegram_owner_dm_send_message",
             "telegram_sources_ro_list_sources",
             "telegram_sources_ro_sync_sources",
+            "telegram_sources_ro_list_topics",
             "telegram_sources_ro_get_messages"
           ]
         }
@@ -344,10 +350,12 @@ Give each OpenClaw agent only its own tools:
         "tools": {
           "allow": [
             "telegram_wife_dm_get_dialogs",
+            "telegram_wife_dm_list_topics",
             "telegram_wife_dm_get_messages",
             "telegram_wife_dm_send_message",
             "telegram_sources_ro_list_sources",
             "telegram_sources_ro_sync_sources",
+            "telegram_sources_ro_list_topics",
             "telegram_sources_ro_get_messages"
           ]
         }
@@ -364,9 +372,11 @@ This is the main separation mechanism. One agent should never get the other agen
 For groups/channels/forums and periodic processing:
 
 - schedule jobs inside OpenClaw via cron/heartbeat/automations;
+- keep checkpoints in OpenClaw, not in the bridge;
 - keep a checkpoint per `{profile, peer}`;
 - if forum topics matter, keep checkpoints per `{profile, peer, topic_id}`;
 - call `telegram_sources_ro_list_sources` or `telegram_sources_ro_sync_sources` before first use or after the Telegram account joins new sources;
+- for forum chats, call `telegram_sources_ro_list_topics(peer=...)` and use the returned `topic_id` as the thread fetch id;
 - call `telegram_sources_ro_get_messages` with a small `limit` and `min_id`;
 - summarize only deltas, not whole chats;
 - use returned sender/topic metadata instead of rereading the same history.
@@ -378,6 +388,25 @@ Example polling pattern:
 3. call `telegram_sources_ro_get_messages(peer=-1003333333333, min_id=last_message_id, limit=20)`;
 4. summarize only returned messages;
 5. update the checkpoint with the new max message id.
+
+Example forum-topic polling pattern:
+
+1. call `telegram_sources_ro_list_topics(peer=-1003333333333, limit=20)`;
+2. pick the needed `topic_id` from the result;
+3. read stored `last_message_id` for `{sources_ro, -1003333333333, topic_id}`;
+4. call `telegram_sources_ro_get_messages(peer=-1003333333333, topic_id=900, min_id=last_message_id, limit=20)`;
+5. summarize only returned messages and update the OpenClaw checkpoint.
+
+Example forum-wide digest pattern:
+
+1. call `telegram_sources_ro_list_topics(peer=-1003333333333, limit=50)`;
+2. for each returned topic, load the OpenClaw checkpoint for `{sources_ro, -1003333333333, topic_id}`;
+3. call `telegram_sources_ro_get_messages(peer=-1003333333333, topic_id=<topic_id>, min_id=<checkpoint>, limit=20)` separately per topic;
+4. skip topics with no new messages;
+5. produce the digest grouped by topic title and mention message authors from returned metadata;
+6. update only the checkpoints for topics that produced new messages.
+
+Operational rule: checkpoints belong to OpenClaw, not to the bridge. The bridge only returns deltas and topic metadata.
 
 ## Backend configuration
 

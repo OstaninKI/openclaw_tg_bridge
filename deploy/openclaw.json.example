@@ -79,10 +79,12 @@
         "tools": {
           "allow": [
             "telegram_owner_dm_get_dialogs",
+            "telegram_owner_dm_list_topics",
             "telegram_owner_dm_get_messages",
             "telegram_owner_dm_send_message",
             "telegram_sources_ro_list_sources",
             "telegram_sources_ro_sync_sources",
+            "telegram_sources_ro_list_topics",
             "telegram_sources_ro_get_messages"
           ]
         }
@@ -92,10 +94,12 @@
         "tools": {
           "allow": [
             "telegram_wife_dm_get_dialogs",
+            "telegram_wife_dm_list_topics",
             "telegram_wife_dm_get_messages",
             "telegram_wife_dm_send_message",
             "telegram_sources_ro_list_sources",
             "telegram_sources_ro_sync_sources",
+            "telegram_sources_ro_list_topics",
             "telegram_sources_ro_get_messages"
           ]
         }

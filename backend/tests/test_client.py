@@ -52,6 +52,7 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.mock_tg = MagicMock()
         self.mock_tg.is_connected = MagicMock(return_value=True)
+        self.mock_tg.__call__ = AsyncMock()
         self.mock_tg.connect = AsyncMock()
         self.mock_tg.disconnect = AsyncMock()
         self.mock_tg.get_entity = AsyncMock()
@@ -214,6 +215,118 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         messages = await bridge.get_messages("42", limit=10, min_id=50)
 
         self.assertEqual([message["id"] for message in messages], [51, 52])
+
+    async def test_list_topics_uses_forum_topics_request(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="forumchat", forum=True)
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.__call__.return_value = SimpleNamespace(
+            topics=[
+                SimpleNamespace(
+                    id=12,
+                    top_message=900,
+                    title="Releases",
+                    unread_count=3,
+                    pinned=True,
+                    closed=False,
+                    hidden=False,
+                )
+            ]
+        )
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(
+                GetForumTopicsRequest=lambda **kwargs: {"kind": "topics", **kwargs},
+            )
+        )
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            topics = await bridge.list_topics("42", limit=10)
+
+        self.assertEqual(
+            topics,
+            [
+                {
+                    "id": 12,
+                    "topic_id": 900,
+                    "title": "Releases",
+                    "icon_color": None,
+                    "icon_emoji_id": None,
+                    "closed": False,
+                    "hidden": False,
+                    "pinned": True,
+                    "unread_count": 3,
+                    "unread_mentions_count": None,
+                    "unread_reactions_count": None,
+                    "from_id": None,
+                    "date": None,
+                }
+            ],
+        )
+        self.mock_tg.__call__.assert_awaited_once_with(
+            {
+                "kind": "topics",
+                "peer": entity,
+                "offset_date": None,
+                "offset_id": 0,
+                "offset_topic": 0,
+                "limit": 10,
+                "q": "",
+            }
+        )
+
+    async def test_get_messages_reads_specific_topic_with_sender_lookup(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="forumchat", forum=True)
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.__call__.return_value = SimpleNamespace(
+            messages=[
+                SimpleNamespace(
+                    id=53,
+                    text="newer",
+                    date="2026-03-14",
+                    out=False,
+                    from_id=SimpleNamespace(user_id=7),
+                    reply_to=SimpleNamespace(reply_to_top_id=900),
+                ),
+                SimpleNamespace(
+                    id=52,
+                    text="older",
+                    date="2026-03-14",
+                    out=False,
+                    from_id=SimpleNamespace(user_id=7),
+                ),
+            ],
+            users=[SimpleNamespace(id=7, first_name="Alice", last_name=None, username="alice")],
+            chats=[],
+        )
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(
+                GetRepliesRequest=lambda **kwargs: {"kind": "replies", **kwargs},
+            )
+        )
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            messages = await bridge.get_messages("42", limit=10, min_id=50, topic_id=900)
+
+        self.assertEqual([message["id"] for message in messages], [52, 53])
+        self.assertEqual(messages[0]["sender_name"], "Alice")
+        self.assertEqual(messages[0]["sender_username"], "alice")
+        self.assertEqual(messages[0]["topic_id"], 900)
+        self.assertEqual(messages[1]["topic_id"], 900)
+        self.mock_tg.__call__.assert_awaited_once_with(
+            {
+                "kind": "replies",
+                "peer": entity,
+                "msg_id": 900,
+                "offset_id": 0,
+                "offset_date": None,
+                "add_offset": 0,
+                "limit": 10,
+                "max_id": 0,
+                "min_id": 50,
+                "hash": 0,
+            }
+        )
 
     async def test_discover_source_dialogs_returns_serializable_inventory_entries(self) -> None:
         bridge = self.create_bridge()

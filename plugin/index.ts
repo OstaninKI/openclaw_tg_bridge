@@ -1127,24 +1127,81 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
 
   api.registerTool(
     {
+      name: `${prefix}_list_topics`,
+      description:
+        `List forum topics for a Telegram forum chat using the "${profileLabel}" context. ` +
+        "Use this before topic-specific polling. The returned topic_id is the thread root message id to pass into get_messages.",
+      parameters: Type.Object({
+        peer: Type.Union([Type.String(), Type.Number()], { description: "Forum chat username or chat id" }),
+        limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100, default: 20 })),
+      }),
+      async execute(_id: string, params: { peer: string | number; limit?: number }) {
+        const limit = Math.min(100, Math.max(1, params.limit ?? 20));
+        const peer = encodeURIComponent(String(params.peer));
+        const res = await fetchBridge(api, profile, `/topics?peer=${peer}&limit=${limit}`);
+        if (!res.ok) {
+          return toolResult(formatBridgeError(res));
+        }
+        const topics =
+          (res.data as {
+            topics?: Array<{
+              topic_id?: unknown;
+              title?: string;
+              unread_count?: unknown;
+              closed?: boolean;
+              pinned?: boolean;
+              hidden?: boolean;
+            }>;
+          })?.topics ?? [];
+        const lines = topics.map((topic) => {
+          const flags = [
+            typeof topic.unread_count === "number" ? `unread:${topic.unread_count}` : null,
+            topic.pinned ? "pinned" : null,
+            topic.closed ? "closed" : null,
+            topic.hidden ? "hidden" : null,
+          ].filter(Boolean);
+          return `- ${topic.title || `Topic ${topic.topic_id}`} (topic_id: ${topic.topic_id}${
+            flags.length ? `, ${flags.join(", ")}` : ""
+          })`;
+        });
+        return toolResult(lines.length ? lines.join("\n") : "No forum topics.");
+      },
+    },
+    optional
+  );
+
+  api.registerTool(
+    {
       name: `${prefix}_get_messages`,
       description:
         isSourcesReadOnly
           ? `Get recent messages from an auto-discovered read-only Telegram source using the "${profileLabel}" context. ` +
-            "Use this in scheduled polling jobs. Prefer min_id to fetch only new messages and save tokens."
+            "Use this in scheduled polling jobs. Prefer min_id to fetch only new messages and save tokens. " +
+            "For forum threads, pass topic_id from list_topics or from earlier message metadata."
           : `Get recent messages from a Telegram chat using the "${profileLabel}" context. ` +
             "Use when the user explicitly asks to read Telegram messages or when a scheduled workflow polls new messages. " +
-            "Use min_id to fetch only newer messages and reduce token usage.",
+            "Use min_id to fetch only newer messages and reduce token usage. " +
+            "For forum threads, pass topic_id from list_topics or from earlier message metadata.",
       parameters: Type.Object({
         peer: Type.Union([Type.String(), Type.Number()], { description: "Username, chat id, or 'me'" }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 20 })),
         min_id: Type.Optional(Type.Number({ minimum: 1, description: "Only return messages newer than this id" })),
+        topic_id: Type.Optional(
+          Type.Number({
+            minimum: 1,
+            description: "Optional forum topic root message id returned by list_topics or message metadata",
+          })
+        ),
       }),
-      async execute(_id: string, params: { peer: string | number; limit?: number; min_id?: number }) {
+      async execute(
+        _id: string,
+        params: { peer: string | number; limit?: number; min_id?: number; topic_id?: number }
+      ) {
         const limit = Math.min(50, Math.max(1, params.limit ?? 20));
         const peer = encodeURIComponent(String(params.peer));
         const minId = typeof params.min_id === "number" ? `&min_id=${Math.max(1, params.min_id)}` : "";
-        const res = await fetchBridge(api, profile, `/messages?peer=${peer}&limit=${limit}${minId}`);
+        const topicId = typeof params.topic_id === "number" ? `&topic_id=${Math.max(1, params.topic_id)}` : "";
+        const res = await fetchBridge(api, profile, `/messages?peer=${peer}&limit=${limit}${minId}${topicId}`);
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }
