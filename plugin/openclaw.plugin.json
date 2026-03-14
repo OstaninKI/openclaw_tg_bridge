@@ -1,0 +1,54 @@
+{
+  "id": "telegram-user-bridge",
+  "name": "Unofficial Telegram User Bridge",
+  "version": "0.1.0",
+  "description": "Agent tools for live Telegram user account (MTProto via Telethon bridge). Use only with explicit user consent.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8765",
+        "description": "Bridge HTTP API base URL"
+      },
+      "apiToken": {
+        "type": "string",
+        "description": "Optional Bearer token (set TELEGRAM_BRIDGE_API_TOKEN on backend to require)"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "default": 25000,
+        "description": "HTTP request timeout in milliseconds"
+      },
+      "replyDelaySec": {
+        "type": "number",
+        "default": 2,
+        "description": "Reply delay override enforced by the backend"
+      },
+      "replyDelayMaxSec": {
+        "type": "number",
+        "description": "Optional max delay override enforced by the backend"
+      },
+      "allowFrom": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": ["*"],
+        "description": "Allowed chat ids/usernames enforced by the backend (* = all)"
+      },
+      "denyFrom": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Denied chat ids/usernames enforced by the backend"
+      }
+    }
+  },
+  "uiHints": {
+    "baseUrl": { "label": "Bridge URL", "placeholder": "http://127.0.0.1:8765" },
+    "apiToken": { "label": "API Token", "sensitive": true },
+    "timeoutMs": { "label": "Timeout (ms)" },
+    "replyDelaySec": { "label": "Reply delay (sec)" },
+    "replyDelayMaxSec": { "label": "Reply delay max (sec)" }
+  },
+  "skills": ["./skills/telegram-user"]
+}

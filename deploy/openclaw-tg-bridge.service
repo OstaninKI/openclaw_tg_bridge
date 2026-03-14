@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenClaw Telegram Bridge (Telethon HTTP API)
+After=network.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/openclaw-tg-bridge/backend
+EnvironmentFile=-/etc/openclaw-tg-bridge.env
+ExecStart=/opt/openclaw-tg-bridge/backend/.venv/bin/python -m openclaw_tg_bridge run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

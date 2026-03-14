@@ -1,0 +1,29 @@
+{
+  "plugins": {
+    "enabled": true,
+    "allow": ["telegram-user-bridge"],
+    "entries": {
+      "telegram-user-bridge": {
+        "enabled": true,
+        "config": {
+          "baseUrl": "http://127.0.0.1:8765",
+          "timeoutMs": 25000,
+          "replyDelaySec": 2,
+          "replyDelayMaxSec": 4,
+          "allowFrom": ["*"],
+          "denyFrom": []
+        }
+      }
+    }
+  },
+  "agents": {
+    "list": [
+      {
+        "id": "main",
+        "tools": {
+          "allow": ["telegram-user-bridge"]
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,65 @@
+"""Entry point: auth CLI or run server."""
+
+import argparse
+import logging
+import sys
+
+from openclaw_tg_bridge.config import load_config
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="OpenClaw Telegram Bridge")
+    sub = parser.add_subparsers(dest="command", required=True)
+    auth_p = sub.add_parser("auth", help="Create session locally (interactive)")
+    auth_p.add_argument("--session-path", default=None, help="Session file path")
+    auth_p.add_argument(
+        "--print-session-string",
+        action="store_true",
+        help="Print the generated StringSession to stdout",
+    )
+    auth_p.add_argument(
+        "--session-string-out",
+        default=None,
+        help="Write the generated StringSession to a file",
+    )
+    run_p = sub.add_parser("run", help="Run HTTP bridge server")
+    run_p.add_argument("--host", default=None, help="Override listen host")
+    run_p.add_argument("--port", type=int, default=None, help="Override listen port")
+    args = parser.parse_args()
+
+    if args.command == "auth":
+        from openclaw_tg_bridge.auth import main as auth_main
+
+        auth_main(
+            session_path=args.session_path,
+            print_session_string=args.print_session_string,
+            session_string_out=args.session_string_out,
+        )
+        return
+
+    if args.command == "run":
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+        cfg = load_config()
+        listen = cfg["listen"]
+        if ":" in listen:
+            host, port_s = listen.rsplit(":", 1)
+            port = int(port_s)
+        else:
+            host, port = listen, 8765
+        if args.host is not None:
+            host = args.host
+        if args.port is not None:
+            port = args.port
+        import uvicorn
+        from openclaw_tg_bridge.server import app
+        uvicorn.run(app, host=host, port=port, log_level="info")
+        return
+
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
