@@ -505,6 +505,11 @@ def _can_write_self(scope: BridgeScope) -> bool:
     return scope.allow_all or "me" in scope.allow
 
 
+def _require_self_write(scope: BridgeScope, *, detail: str) -> None:
+    if not _can_write_self(scope):
+        raise BridgeForbiddenError(detail)
+
+
 def _extract_flood_wait_seconds(exc: BaseException) -> int | None:
     seconds = getattr(exc, "seconds", None)
     if isinstance(seconds, int):
@@ -723,6 +728,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing backend-host files is not allowed for this profile.")
         file_path = str(file_path or "").strip()
         if not file_path:
             raise BridgeValidationError("file_path is required.")
@@ -755,6 +761,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing backend-host files is not allowed for this profile.")
         file_path = str(file_path or "").strip()
         if not file_path:
             raise BridgeValidationError("file_path is required.")
@@ -786,6 +793,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing backend-host files is not allowed for this profile.")
         file_path = str(file_path or "").strip()
         if not file_path:
             raise BridgeValidationError("file_path is required.")
@@ -998,6 +1006,8 @@ class BridgeClient:
         output_path: str | None = None,
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Downloading media to the backend host is not allowed for this profile.")
         message = await self.get_message(peer, message_id, policy_overrides=policy_overrides)
         entity = await self._resolve_entity(peer, action="download media")
         tg_message = await self._call_telegram(
@@ -1078,6 +1088,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> list[dict[str, Any]]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for listing contacts.")
         functions = _telethon_functions()
         result = await self._call_telegram(
             self._client.__call__,
@@ -1107,6 +1118,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> list[dict[str, Any]]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for searching contacts.")
         query = (query or "").strip()
         if not query:
             raise BridgeValidationError("query is required.")
@@ -1140,8 +1152,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
-        if not _can_write_self(policy.write_scope):
-            raise BridgeForbiddenError("Writing is not allowed for creating contacts.")
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for creating contacts.")
         phone = phone.strip()
         first_name = first_name.strip()
         if not phone or not first_name:
@@ -1180,6 +1191,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for deleting contacts.")
         entity, _ = await self._resolve_scoped_entity(
             user_peer,
             action="writing",
@@ -1200,6 +1212,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for blocking users.")
         entity, _ = await self._resolve_scoped_entity(
             user_peer,
             action="writing",
@@ -1220,6 +1233,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for unblocking users.")
         entity, _ = await self._resolve_scoped_entity(
             user_peer,
             action="writing",
@@ -1240,6 +1254,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> list[dict[str, Any]]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for listing blocked users.")
         functions = _telethon_functions()
         result = await self._call_telegram(
             self._client.__call__,
@@ -1269,8 +1284,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
-        if not _can_write_self(policy.write_scope):
-            raise BridgeForbiddenError("Writing is not allowed for creating groups.")
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for creating groups.")
         title = title.strip()
         if not title:
             raise BridgeValidationError("title is required.")
@@ -1301,8 +1315,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
-        if not _can_write_self(policy.write_scope):
-            raise BridgeForbiddenError("Writing is not allowed for creating channels.")
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for creating channels.")
         title = title.strip()
         if not title:
             raise BridgeValidationError("title is required.")
@@ -1328,6 +1341,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for inviting users.")
         entity, _ = await self._resolve_scoped_entity(
             peer,
             action="writing",
@@ -1368,6 +1382,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for exporting invite links.")
         entity, _ = await self._resolve_scoped_entity(
             peer,
             action="reading",
@@ -1388,8 +1403,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
-        if not _can_write_self(policy.write_scope):
-            raise BridgeForbiddenError("Writing is not allowed for joining chats.")
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for joining chats.")
         link = link.strip()
         if not link:
             raise BridgeValidationError("link is required.")
@@ -2057,6 +2071,7 @@ class BridgeClient:
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for leaving chats.")
         async with self._send_lock:
             entity, _ = await self._resolve_scoped_entity(
                 peer,

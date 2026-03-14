@@ -17,6 +17,7 @@
               "id": "owner_dm",
               "label": "Owner DM",
               "mode": "interactive",
+              "privilegedTools": true,
               "policyProfile": "owner_dm"
             },
             {

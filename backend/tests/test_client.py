@@ -462,7 +462,7 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([message["id"] for message in messages], [10])
 
     async def test_send_file_uses_write_scope(self) -> None:
-        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+        bridge = self.create_bridge(write_allow_chat_ids=["me", "42"])
         entity = SimpleNamespace(id=42, username="allowed")
         self.mock_tg.get_entity.return_value = entity
         self.mock_tg.send_file.return_value = SimpleNamespace(id=333)
@@ -479,6 +479,26 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
             caption="hello",
             reply_to=None,
         )
+
+    async def test_send_file_requires_self_write_access(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+
+        with patch("openclaw_tg_bridge.client.Path.exists", return_value=True):
+            with self.assertRaisesRegex(BridgeForbiddenError, "backend-host files"):
+                await bridge.send_file("42", "/tmp/file.txt")
+
+    async def test_get_blocked_users_requires_self_write_access(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+
+        with self.assertRaisesRegex(BridgeForbiddenError, "listing blocked users"):
+            await bridge.get_blocked_users()
+
+    async def test_leave_chat_requires_self_write_access(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+        self.mock_tg.get_entity.return_value = SimpleNamespace(id=42, title="Ops")
+
+        with self.assertRaisesRegex(BridgeForbiddenError, "leaving chats"):
+            await bridge.leave_chat("42")
 
     async def test_get_message_includes_media_and_geo_metadata(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"])
@@ -578,7 +598,7 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_list_contacts_filters_by_read_scope(self) -> None:
-        bridge = self.create_bridge(allow_chat_ids=["42"])
+        bridge = self.create_bridge(allow_chat_ids=["42"], write_allow_chat_ids=["me"])
         functions_ns = SimpleNamespace(
             contacts=SimpleNamespace(GetContactsRequest=lambda **kwargs: {"kind": "contacts", **kwargs})
         )
@@ -593,6 +613,12 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
             contacts = await bridge.list_contacts()
 
         self.assertEqual(contacts, [{"id": 42, "username": "allowed", "title": "Allowed", "phone": "123"}])
+
+    async def test_list_contacts_requires_self_write_access(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+
+        with self.assertRaisesRegex(BridgeForbiddenError, "listing contacts"):
+            await bridge.list_contacts()
 
     async def test_add_contact_requires_self_write_access(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["42"])

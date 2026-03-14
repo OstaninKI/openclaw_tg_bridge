@@ -36,6 +36,7 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
               {
                 id: "owner",
                 label: "Owner",
+                privilegedTools: true,
                 policyProfile: "owner",
                 allowFrom: ["@durov", "-1001"],
                 writeTo: ["me"],
@@ -67,6 +68,9 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   assert.ok(getTool(api, "telegram_owner_get_participants"));
   assert.ok(getTool(api, "telegram_owner_get_admins"));
   assert.ok(getTool(api, "telegram_shared_get_messages"));
+  assert.equal(getTool(api, "telegram_shared_send_file"), undefined);
+  assert.equal(getTool(api, "telegram_shared_download_media"), undefined);
+  assert.equal(getTool(api, "telegram_shared_add_contact"), undefined);
   assert.equal(getTool(api, "telegram_user_send_message"), undefined);
 
   let capturedUrl = "";
@@ -114,6 +118,27 @@ test("plugin sends file via backend endpoint", async () => {
   assert.equal(capturedInit.method, "POST");
   assert.match(capturedInit.body, /\/tmp\/test\.txt/);
   assert.match(result.content[0].text, /File sent/);
+});
+
+test("explicit interactive profile skips privileged tools by default", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "trusted", label: "Trusted", mode: "interactive", policyProfile: "trusted_dm" }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  assert.ok(getTool(api, "telegram_trusted_send_message"));
+  assert.equal(getTool(api, "telegram_trusted_send_file"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_download_media"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_list_contacts"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_create_group"), undefined);
 });
 
 test("plugin downloads media via backend endpoint", async () => {

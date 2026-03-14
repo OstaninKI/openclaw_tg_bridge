@@ -36,6 +36,7 @@ type ProfileConfig = PolicyHeaderConfig & {
   id: string;
   label: string;
   mode: ProfileMode;
+  privilegedTools: boolean;
 };
 
 type PluginConfig = {
@@ -103,6 +104,7 @@ function normalizeProfile(raw: Record<string, unknown>, fallbackId: string): Pro
     id,
     label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : id,
     mode,
+    privilegedTools: raw.privilegedTools === true,
     policyProfile:
       typeof raw.policyProfile === "string" && raw.policyProfile.trim() ? raw.policyProfile.trim() : undefined,
     replyDelaySec: typeof raw.replyDelaySec === "number" ? raw.replyDelaySec : undefined,
@@ -130,6 +132,7 @@ function getConfig(api: { config: Record<string, unknown> }): PluginConfig {
       id: "user",
       label: "User",
       mode: "interactive",
+      privilegedTools: true,
       policyProfile:
         typeof cfg?.policyProfile === "string" && (cfg.policyProfile as string).trim()
           ? (cfg.policyProfile as string).trim()
@@ -1002,6 +1005,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
   const profileLabel = profile.label;
   const optional = { optional: true };
   const isSourcesReadOnly = profile.mode === "sources_ro";
+  const allowPrivilegedTools = !isSourcesReadOnly && profile.privilegedTools === true;
 
   if (!isSourcesReadOnly) {
     api.registerTool(
@@ -1037,42 +1041,44 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
       optional
     );
 
-    api.registerTool(
-      {
-        name: `${prefix}_send_file`,
-        description:
-          `Send a local file from the backend host to Telegram using the "${profileLabel}" context. ` +
-          "Use only when the user explicitly asks. Writing is blocked by default unless this context is allowed to write.",
-        parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], {
-            description: "Username (@name), chat id, or 'me'",
-          }),
-          file_path: Type.String({ minLength: 1, description: "Absolute or backend-local file path" }),
-          caption: Type.Optional(Type.String({ description: "Optional caption" })),
-          reply_to: Type.Optional(Type.Number({ description: "Message id to reply to" })),
-        }),
-        async execute(
-          _id: string,
-          params: { peer: string | number; file_path: string; caption?: string; reply_to?: number }
-        ) {
-          const res = await fetchBridge(api, profile, "/send_file", {
-            method: "POST",
-            body: JSON.stringify({
-              peer: params.peer,
-              file_path: params.file_path,
-              caption: params.caption ?? null,
-              reply_to: params.reply_to ?? null,
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_send_file`,
+          description:
+            `Send a local file from the backend host to Telegram using the "${profileLabel}" context. ` +
+            "Use only when the user explicitly asks. Writing is blocked by default unless this context is allowed to write.",
+          parameters: Type.Object({
+            peer: Type.Union([Type.String(), Type.Number()], {
+              description: "Username (@name), chat id, or 'me'",
             }),
-          });
-          if (!res.ok) {
-            return toolResult(formatBridgeError(res));
-          }
-          const messageId = (res.data as { message_id?: unknown } | undefined)?.message_id;
-          return toolResult(messageId ? `File sent (id: ${messageId}).` : "File sent.");
+            file_path: Type.String({ minLength: 1, description: "Absolute or backend-local file path" }),
+            caption: Type.Optional(Type.String({ description: "Optional caption" })),
+            reply_to: Type.Optional(Type.Number({ description: "Message id to reply to" })),
+          }),
+          async execute(
+            _id: string,
+            params: { peer: string | number; file_path: string; caption?: string; reply_to?: number }
+          ) {
+            const res = await fetchBridge(api, profile, "/send_file", {
+              method: "POST",
+              body: JSON.stringify({
+                peer: params.peer,
+                file_path: params.file_path,
+                caption: params.caption ?? null,
+                reply_to: params.reply_to ?? null,
+              }),
+            });
+            if (!res.ok) {
+              return toolResult(formatBridgeError(res));
+            }
+            const messageId = (res.data as { message_id?: unknown } | undefined)?.message_id;
+            return toolResult(messageId ? `File sent (id: ${messageId}).` : "File sent.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
     api.registerTool(
       {
@@ -1186,244 +1192,266 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
       optional
     );
 
-    api.registerTool(
-      {
-        name: `${prefix}_leave_chat`,
-        description:
-          `Leave a Telegram group/channel/dialog using the "${profileLabel}" context. ` +
-          "Use only when the user explicitly asks.",
-        parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "Chat username or chat id" }),
-        }),
-        async execute(_id: string, params: { peer: string | number }) {
-          const res = await fetchBridge(api, profile, "/leave_chat", {
-            method: "POST",
-            body: JSON.stringify(params),
-          });
-          if (!res.ok) {
-            return toolResult(formatBridgeError(res));
-          }
-          return toolResult("Chat left.");
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_leave_chat`,
+          description:
+            `Leave a Telegram group/channel/dialog using the "${profileLabel}" context. ` +
+            "Use only when the user explicitly asks.",
+          parameters: Type.Object({
+            peer: Type.Union([Type.String(), Type.Number()], { description: "Chat username or chat id" }),
+          }),
+          async execute(_id: string, params: { peer: string | number }) {
+            const res = await fetchBridge(api, profile, "/leave_chat", {
+              method: "POST",
+              body: JSON.stringify(params),
+            });
+            if (!res.ok) {
+              return toolResult(formatBridgeError(res));
+            }
+            return toolResult("Chat left.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
-    api.registerTool(
-      {
-        name: `${prefix}_send_voice`,
-        description: `Send a local voice note file via Telegram using the "${profileLabel}" context.`,
-        parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "Username (@name), chat id, or 'me'" }),
-          file_path: Type.String({ minLength: 1 }),
-          caption: Type.Optional(Type.String()),
-        }),
-        async execute(_id: string, params: { peer: string | number; file_path: string; caption?: string }) {
-          const res = await fetchBridge(api, profile, "/send_voice", {
-            method: "POST",
-            body: JSON.stringify({
-              peer: params.peer,
-              file_path: params.file_path,
-              caption: params.caption ?? null,
-            }),
-          });
-          if (!res.ok) return toolResult(formatBridgeError(res));
-          return toolResult("Voice note sent.");
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_send_voice`,
+          description: `Send a local voice note file via Telegram using the "${profileLabel}" context.`,
+          parameters: Type.Object({
+            peer: Type.Union([Type.String(), Type.Number()], { description: "Username (@name), chat id, or 'me'" }),
+            file_path: Type.String({ minLength: 1 }),
+            caption: Type.Optional(Type.String()),
+          }),
+          async execute(_id: string, params: { peer: string | number; file_path: string; caption?: string }) {
+            const res = await fetchBridge(api, profile, "/send_voice", {
+              method: "POST",
+              body: JSON.stringify({
+                peer: params.peer,
+                file_path: params.file_path,
+                caption: params.caption ?? null,
+              }),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            return toolResult("Voice note sent.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
-    api.registerTool(
-      {
-        name: `${prefix}_send_sticker`,
-        description: `Send a local sticker file via Telegram using the "${profileLabel}" context.`,
-        parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "Username (@name), chat id, or 'me'" }),
-          file_path: Type.String({ minLength: 1 }),
-        }),
-        async execute(_id: string, params: { peer: string | number; file_path: string }) {
-          const res = await fetchBridge(api, profile, "/send_sticker", {
-            method: "POST",
-            body: JSON.stringify(params),
-          });
-          if (!res.ok) return toolResult(formatBridgeError(res));
-          return toolResult("Sticker sent.");
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_send_sticker`,
+          description: `Send a local sticker file via Telegram using the "${profileLabel}" context.`,
+          parameters: Type.Object({
+            peer: Type.Union([Type.String(), Type.Number()], { description: "Username (@name), chat id, or 'me'" }),
+            file_path: Type.String({ minLength: 1 }),
+          }),
+          async execute(_id: string, params: { peer: string | number; file_path: string }) {
+            const res = await fetchBridge(api, profile, "/send_sticker", {
+              method: "POST",
+              body: JSON.stringify(params),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            return toolResult("Sticker sent.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
-    api.registerTool(
-      {
-        name: `${prefix}_add_contact`,
-        description: `Add a Telegram contact using the "${profileLabel}" context.`,
-        parameters: Type.Object({
-          phone: Type.String({ minLength: 1 }),
-          first_name: Type.String({ minLength: 1 }),
-          last_name: Type.Optional(Type.String()),
-        }),
-        async execute(_id: string, params: { phone: string; first_name: string; last_name?: string }) {
-          const res = await fetchBridge(api, profile, "/contacts/add", {
-            method: "POST",
-            body: JSON.stringify({
-              phone: params.phone,
-              first_name: params.first_name,
-              last_name: params.last_name ?? null,
-            }),
-          });
-          if (!res.ok) return toolResult(formatBridgeError(res));
-          const contact = (res.data as { contact?: Record<string, unknown> } | undefined)?.contact ?? {};
-          return toolResult(`Contact added: ${contact.title || contact.username || contact.id || params.phone}.`);
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_add_contact`,
+          description: `Add a Telegram contact using the "${profileLabel}" context.`,
+          parameters: Type.Object({
+            phone: Type.String({ minLength: 1 }),
+            first_name: Type.String({ minLength: 1 }),
+            last_name: Type.Optional(Type.String()),
+          }),
+          async execute(_id: string, params: { phone: string; first_name: string; last_name?: string }) {
+            const res = await fetchBridge(api, profile, "/contacts/add", {
+              method: "POST",
+              body: JSON.stringify({
+                phone: params.phone,
+                first_name: params.first_name,
+                last_name: params.last_name ?? null,
+              }),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            const contact = (res.data as { contact?: Record<string, unknown> } | undefined)?.contact ?? {};
+            return toolResult(`Contact added: ${contact.title || contact.username || contact.id || params.phone}.`);
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
-    api.registerTool(
-      {
-        name: `${prefix}_delete_contact`,
-        description: `Delete a Telegram contact using the "${profileLabel}" context.`,
-        parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
-        }),
-        async execute(_id: string, params: { peer: string | number }) {
-          const res = await fetchBridge(api, profile, "/contacts/delete", {
-            method: "POST",
-            body: JSON.stringify(params),
-          });
-          if (!res.ok) return toolResult(formatBridgeError(res));
-          return toolResult("Contact deleted.");
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_delete_contact`,
+          description: `Delete a Telegram contact using the "${profileLabel}" context.`,
+          parameters: Type.Object({
+            peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
+          }),
+          async execute(_id: string, params: { peer: string | number }) {
+            const res = await fetchBridge(api, profile, "/contacts/delete", {
+              method: "POST",
+              body: JSON.stringify(params),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            return toolResult("Contact deleted.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
-    api.registerTool(
-      {
-        name: `${prefix}_block_user`,
-        description: `Block a Telegram user using the "${profileLabel}" context.`,
-        parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
-        }),
-        async execute(_id: string, params: { peer: string | number }) {
-          const res = await fetchBridge(api, profile, "/block_user", {
-            method: "POST",
-            body: JSON.stringify(params),
-          });
-          if (!res.ok) return toolResult(formatBridgeError(res));
-          return toolResult("User blocked.");
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_block_user`,
+          description: `Block a Telegram user using the "${profileLabel}" context.`,
+          parameters: Type.Object({
+            peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
+          }),
+          async execute(_id: string, params: { peer: string | number }) {
+            const res = await fetchBridge(api, profile, "/block_user", {
+              method: "POST",
+              body: JSON.stringify(params),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            return toolResult("User blocked.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
-    api.registerTool(
-      {
-        name: `${prefix}_unblock_user`,
-        description: `Unblock a Telegram user using the "${profileLabel}" context.`,
-        parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
-        }),
-        async execute(_id: string, params: { peer: string | number }) {
-          const res = await fetchBridge(api, profile, "/unblock_user", {
-            method: "POST",
-            body: JSON.stringify(params),
-          });
-          if (!res.ok) return toolResult(formatBridgeError(res));
-          return toolResult("User unblocked.");
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_unblock_user`,
+          description: `Unblock a Telegram user using the "${profileLabel}" context.`,
+          parameters: Type.Object({
+            peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
+          }),
+          async execute(_id: string, params: { peer: string | number }) {
+            const res = await fetchBridge(api, profile, "/unblock_user", {
+              method: "POST",
+              body: JSON.stringify(params),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            return toolResult("User unblocked.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
-    api.registerTool(
-      {
-        name: `${prefix}_create_group`,
-        description: `Create a Telegram group using the "${profileLabel}" context.`,
-        parameters: Type.Object({
-          title: Type.String({ minLength: 1 }),
-          users: Type.Array(Type.Union([Type.String(), Type.Number()]), { default: [] }),
-        }),
-        async execute(_id: string, params: { title: string; users: Array<string | number> }) {
-          const res = await fetchBridge(api, profile, "/create_group", {
-            method: "POST",
-            body: JSON.stringify(params),
-          });
-          if (!res.ok) return toolResult(formatBridgeError(res));
-          const chatId = (res.data as { chat_id?: unknown } | undefined)?.chat_id;
-          return toolResult(chatId ? `Group created (id: ${chatId}).` : "Group created.");
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_create_group`,
+          description: `Create a Telegram group using the "${profileLabel}" context.`,
+          parameters: Type.Object({
+            title: Type.String({ minLength: 1 }),
+            users: Type.Array(Type.Union([Type.String(), Type.Number()]), { default: [] }),
+          }),
+          async execute(_id: string, params: { title: string; users: Array<string | number> }) {
+            const res = await fetchBridge(api, profile, "/create_group", {
+              method: "POST",
+              body: JSON.stringify(params),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            const chatId = (res.data as { chat_id?: unknown } | undefined)?.chat_id;
+            return toolResult(chatId ? `Group created (id: ${chatId}).` : "Group created.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
-    api.registerTool(
-      {
-        name: `${prefix}_create_channel`,
-        description: `Create a Telegram channel or supergroup using the "${profileLabel}" context.`,
-        parameters: Type.Object({
-          title: Type.String({ minLength: 1 }),
-          about: Type.Optional(Type.String()),
-          megagroup: Type.Optional(Type.Boolean({ default: false })),
-        }),
-        async execute(_id: string, params: { title: string; about?: string; megagroup?: boolean }) {
-          const res = await fetchBridge(api, profile, "/create_channel", {
-            method: "POST",
-            body: JSON.stringify({
-              title: params.title,
-              about: params.about ?? null,
-              megagroup: params.megagroup ?? false,
-            }),
-          });
-          if (!res.ok) return toolResult(formatBridgeError(res));
-          const chatId = (res.data as { chat_id?: unknown } | undefined)?.chat_id;
-          return toolResult(chatId ? `Channel created (id: ${chatId}).` : "Channel created.");
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_create_channel`,
+          description: `Create a Telegram channel or supergroup using the "${profileLabel}" context.`,
+          parameters: Type.Object({
+            title: Type.String({ minLength: 1 }),
+            about: Type.Optional(Type.String()),
+            megagroup: Type.Optional(Type.Boolean({ default: false })),
+          }),
+          async execute(_id: string, params: { title: string; about?: string; megagroup?: boolean }) {
+            const res = await fetchBridge(api, profile, "/create_channel", {
+              method: "POST",
+              body: JSON.stringify({
+                title: params.title,
+                about: params.about ?? null,
+                megagroup: params.megagroup ?? false,
+              }),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            const chatId = (res.data as { chat_id?: unknown } | undefined)?.chat_id;
+            return toolResult(chatId ? `Channel created (id: ${chatId}).` : "Channel created.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
-    api.registerTool(
-      {
-        name: `${prefix}_invite_to_group`,
-        description: `Invite users to a Telegram group/channel using the "${profileLabel}" context.`,
-        parameters: Type.Object({
-          peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
-          users: Type.Array(Type.Union([Type.String(), Type.Number()]), { minItems: 1 }),
-        }),
-        async execute(_id: string, params: { peer: string | number; users: Array<string | number> }) {
-          const res = await fetchBridge(api, profile, "/invite_to_group", {
-            method: "POST",
-            body: JSON.stringify(params),
-          });
-          if (!res.ok) return toolResult(formatBridgeError(res));
-          const count = (res.data as { invited_count?: unknown } | undefined)?.invited_count;
-          return toolResult(typeof count === "number" ? `Invited ${count} users.` : "Users invited.");
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_invite_to_group`,
+          description: `Invite users to a Telegram group/channel using the "${profileLabel}" context.`,
+          parameters: Type.Object({
+            peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
+            users: Type.Array(Type.Union([Type.String(), Type.Number()]), { minItems: 1 }),
+          }),
+          async execute(_id: string, params: { peer: string | number; users: Array<string | number> }) {
+            const res = await fetchBridge(api, profile, "/invite_to_group", {
+              method: "POST",
+              body: JSON.stringify(params),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            const count = (res.data as { invited_count?: unknown } | undefined)?.invited_count;
+            return toolResult(typeof count === "number" ? `Invited ${count} users.` : "Users invited.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
-    api.registerTool(
-      {
-        name: `${prefix}_join_chat_by_link`,
-        description: `Join a Telegram chat by invite link using the "${profileLabel}" context.`,
-        parameters: Type.Object({
-          link: Type.String({ minLength: 1 }),
-        }),
-        async execute(_id: string, params: { link: string }) {
-          const res = await fetchBridge(api, profile, "/join_chat_by_link", {
-            method: "POST",
-            body: JSON.stringify(params),
-          });
-          if (!res.ok) return toolResult(formatBridgeError(res));
-          const chatId = (res.data as { chat_id?: unknown } | undefined)?.chat_id;
-          return toolResult(chatId ? `Joined chat (id: ${chatId}).` : "Joined chat.");
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_join_chat_by_link`,
+          description: `Join a Telegram chat by invite link using the "${profileLabel}" context.`,
+          parameters: Type.Object({
+            link: Type.String({ minLength: 1 }),
+          }),
+          async execute(_id: string, params: { link: string }) {
+            const res = await fetchBridge(api, profile, "/join_chat_by_link", {
+              method: "POST",
+              body: JSON.stringify(params),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            const chatId = (res.data as { chat_id?: unknown } | undefined)?.chat_id;
+            return toolResult(chatId ? `Joined chat (id: ${chatId}).` : "Joined chat.");
+          },
         },
-      },
-      optional
-    );
+        optional
+      );
+    }
 
     api.registerTool(
       {
@@ -1759,37 +1787,39 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
     optional
   );
 
-  api.registerTool(
-    {
-      name: `${prefix}_download_media`,
-      description:
-        `Download media from one Telegram message using the "${profileLabel}" context. ` +
-        "Use this when the user explicitly asks to save an attachment from a message.",
-      parameters: Type.Object({
-        peer: Type.Union([Type.String(), Type.Number()], { description: "Username, chat id, or 'me'" }),
-        message_id: Type.Number({ minimum: 1 }),
-        output_path: Type.Optional(Type.String({ description: "Optional target path on the backend host" })),
-      }),
-      async execute(_id: string, params: { peer: string | number; message_id: number; output_path?: string }) {
-        const peer = encodeURIComponent(String(params.peer));
-        const output =
-          typeof params.output_path === "string" && params.output_path.trim()
-            ? `&output_path=${encodeURIComponent(params.output_path)}`
-            : "";
-        const res = await fetchBridge(
-          api,
-          profile,
-          `/download_media?peer=${peer}&message_id=${Math.max(1, params.message_id)}${output}`
-        );
-        if (!res.ok) {
-          return toolResult(formatBridgeError(res));
-        }
-        const path = (res.data as { path?: unknown } | undefined)?.path;
-        return toolResult(path ? `Media downloaded to ${path}.` : "Media downloaded.");
+  if (allowPrivilegedTools) {
+    api.registerTool(
+      {
+        name: `${prefix}_download_media`,
+        description:
+          `Download media from one Telegram message using the "${profileLabel}" context. ` +
+          "Use this when the user explicitly asks to save an attachment from a message.",
+        parameters: Type.Object({
+          peer: Type.Union([Type.String(), Type.Number()], { description: "Username, chat id, or 'me'" }),
+          message_id: Type.Number({ minimum: 1 }),
+          output_path: Type.Optional(Type.String({ description: "Optional target path on the backend host" })),
+        }),
+        async execute(_id: string, params: { peer: string | number; message_id: number; output_path?: string }) {
+          const peer = encodeURIComponent(String(params.peer));
+          const output =
+            typeof params.output_path === "string" && params.output_path.trim()
+              ? `&output_path=${encodeURIComponent(params.output_path)}`
+              : "";
+          const res = await fetchBridge(
+            api,
+            profile,
+            `/download_media?peer=${peer}&message_id=${Math.max(1, params.message_id)}${output}`
+          );
+          if (!res.ok) {
+            return toolResult(formatBridgeError(res));
+          }
+          const path = (res.data as { path?: unknown } | undefined)?.path;
+          return toolResult(path ? `Media downloaded to ${path}.` : "Media downloaded.");
+        },
       },
-    },
-    optional
-  );
+      optional
+    );
+  }
 
   api.registerTool(
     {
@@ -1903,77 +1933,83 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
     optional
   );
 
-  api.registerTool(
-    {
-      name: `${prefix}_list_contacts`,
-      description: `List Telegram contacts visible to the "${profileLabel}" context.`,
-      parameters: Type.Object({}),
-      async execute() {
-        const res = await fetchBridge(api, profile, "/contacts");
-        if (!res.ok) return toolResult(formatBridgeError(res));
-        const contacts =
-          (res.data as { contacts?: Array<{ id?: unknown; title?: string; username?: string; phone?: string }> } | undefined)
-            ?.contacts ?? [];
-        const lines = contacts.map((contact) =>
-          `- ${contact.title || contact.username || contact.id} (id: ${contact.id}${contact.username ? `, @${contact.username}` : ""}${
-            contact.phone ? `, ${contact.phone}` : ""
-          })`
-        );
-        return toolResult(lines.length ? lines.join("\n") : "No contacts.");
+  if (allowPrivilegedTools) {
+    api.registerTool(
+      {
+        name: `${prefix}_list_contacts`,
+        description: `List Telegram contacts visible to the "${profileLabel}" context.`,
+        parameters: Type.Object({}),
+        async execute() {
+          const res = await fetchBridge(api, profile, "/contacts");
+          if (!res.ok) return toolResult(formatBridgeError(res));
+          const contacts =
+            (res.data as { contacts?: Array<{ id?: unknown; title?: string; username?: string; phone?: string }> } | undefined)
+              ?.contacts ?? [];
+          const lines = contacts.map((contact) =>
+            `- ${contact.title || contact.username || contact.id} (id: ${contact.id}${contact.username ? `, @${contact.username}` : ""}${
+              contact.phone ? `, ${contact.phone}` : ""
+            })`
+          );
+          return toolResult(lines.length ? lines.join("\n") : "No contacts.");
+        },
       },
-    },
-    optional
-  );
+      optional
+    );
+  }
 
-  api.registerTool(
-    {
-      name: `${prefix}_search_contacts`,
-      description: `Search Telegram contacts visible to the "${profileLabel}" context.`,
-      parameters: Type.Object({
-        query: Type.String({ minLength: 1 }),
-        limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 10 })),
-      }),
-      async execute(_id: string, params: { query: string; limit?: number }) {
-        const res = await fetchBridge(api, profile, "/search_contacts", {
-          method: "POST",
-          body: JSON.stringify({ query: params.query, limit: Math.min(50, Math.max(1, params.limit ?? 10)) }),
-        });
-        if (!res.ok) return toolResult(formatBridgeError(res));
-        const contacts =
-          (res.data as { contacts?: Array<{ id?: unknown; title?: string; username?: string; phone?: string }> } | undefined)
-            ?.contacts ?? [];
-        const lines = contacts.map((contact) =>
-          `- ${contact.title || contact.username || contact.id} (id: ${contact.id}${contact.username ? `, @${contact.username}` : ""}${
-            contact.phone ? `, ${contact.phone}` : ""
-          })`
-        );
-        return toolResult(lines.length ? lines.join("\n") : "No contacts found.");
+  if (allowPrivilegedTools) {
+    api.registerTool(
+      {
+        name: `${prefix}_search_contacts`,
+        description: `Search Telegram contacts visible to the "${profileLabel}" context.`,
+        parameters: Type.Object({
+          query: Type.String({ minLength: 1 }),
+          limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 10 })),
+        }),
+        async execute(_id: string, params: { query: string; limit?: number }) {
+          const res = await fetchBridge(api, profile, "/search_contacts", {
+            method: "POST",
+            body: JSON.stringify({ query: params.query, limit: Math.min(50, Math.max(1, params.limit ?? 10)) }),
+          });
+          if (!res.ok) return toolResult(formatBridgeError(res));
+          const contacts =
+            (res.data as { contacts?: Array<{ id?: unknown; title?: string; username?: string; phone?: string }> } | undefined)
+              ?.contacts ?? [];
+          const lines = contacts.map((contact) =>
+            `- ${contact.title || contact.username || contact.id} (id: ${contact.id}${contact.username ? `, @${contact.username}` : ""}${
+              contact.phone ? `, ${contact.phone}` : ""
+            })`
+          );
+          return toolResult(lines.length ? lines.join("\n") : "No contacts found.");
+        },
       },
-    },
-    optional
-  );
+      optional
+    );
+  }
 
-  api.registerTool(
-    {
-      name: `${prefix}_get_blocked_users`,
-      description: `List blocked Telegram users visible to the "${profileLabel}" context.`,
-      parameters: Type.Object({
-        limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200, default: 100 })),
-      }),
-      async execute(_id: string, params: { limit?: number }) {
-        const limit = Math.min(200, Math.max(1, params.limit ?? 100));
-        const res = await fetchBridge(api, profile, `/blocked_users?limit=${limit}`);
-        if (!res.ok) return toolResult(formatBridgeError(res));
-        const users =
-          (res.data as { users?: Array<{ id?: unknown; title?: string; username?: string }> } | undefined)?.users ?? [];
-        const lines = users.map((user) =>
-          `- ${user.title || user.username || user.id} (id: ${user.id}${user.username ? `, @${user.username}` : ""})`
-        );
-        return toolResult(lines.length ? lines.join("\n") : "No blocked users.");
+  if (allowPrivilegedTools) {
+    api.registerTool(
+      {
+        name: `${prefix}_get_blocked_users`,
+        description: `List blocked Telegram users visible to the "${profileLabel}" context.`,
+        parameters: Type.Object({
+          limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200, default: 100 })),
+        }),
+        async execute(_id: string, params: { limit?: number }) {
+          const limit = Math.min(200, Math.max(1, params.limit ?? 100));
+          const res = await fetchBridge(api, profile, `/blocked_users?limit=${limit}`);
+          if (!res.ok) return toolResult(formatBridgeError(res));
+          const users =
+            (res.data as { users?: Array<{ id?: unknown; title?: string; username?: string }> } | undefined)?.users ?? [];
+          const lines = users.map((user) =>
+            `- ${user.title || user.username || user.id} (id: ${user.id}${user.username ? `, @${user.username}` : ""})`
+          );
+          return toolResult(lines.length ? lines.join("\n") : "No blocked users.");
+        },
       },
-    },
-    optional
-  );
+      optional
+    );
+  }
 
   api.registerTool(
     {
@@ -2105,23 +2141,25 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
     optional
   );
 
-  api.registerTool(
-    {
-      name: `${prefix}_get_invite_link`,
-      description: `Get a Telegram invite link using the "${profileLabel}" context.`,
-      parameters: Type.Object({
-        peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
-      }),
-      async execute(_id: string, params: { peer: string | number }) {
-        const peer = encodeURIComponent(String(params.peer));
-        const res = await fetchBridge(api, profile, `/invite_link?peer=${peer}`);
-        if (!res.ok) return toolResult(formatBridgeError(res));
-        const link = (res.data as { link?: unknown } | undefined)?.link;
-        return toolResult(link ? String(link) : "No invite link.");
+  if (allowPrivilegedTools) {
+    api.registerTool(
+      {
+        name: `${prefix}_get_invite_link`,
+        description: `Get a Telegram invite link using the "${profileLabel}" context.`,
+        parameters: Type.Object({
+          peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
+        }),
+        async execute(_id: string, params: { peer: string | number }) {
+          const peer = encodeURIComponent(String(params.peer));
+          const res = await fetchBridge(api, profile, `/invite_link?peer=${peer}`);
+          if (!res.ok) return toolResult(formatBridgeError(res));
+          const link = (res.data as { link?: unknown } | undefined)?.link;
+          return toolResult(link ? String(link) : "No invite link.");
+        },
       },
-    },
-    optional
-  );
+      optional
+    );
+  }
 
   api.registerTool(
     {

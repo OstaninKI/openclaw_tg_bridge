@@ -71,6 +71,11 @@
               "default": "interactive",
               "description": "interactive = dialogs/messages/send tools, sources_ro = auto-discovered read-only source tools"
             },
+            "privilegedTools": {
+              "type": "boolean",
+              "default": false,
+              "description": "Expose backend-host file tools and self-account/contact mutation tools for this profile"
+            },
             "policyProfile": { "type": "string", "description": "Backend policy profile to use for this context" },
             "replyDelaySec": { "type": "number" },
             "replyDelayMaxSec": { "type": "number" },

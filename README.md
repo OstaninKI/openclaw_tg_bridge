@@ -193,7 +193,7 @@ Example `policy.json`:
         "allow": ["123456789"]
       },
       "write": {
-        "allow": ["123456789"]
+        "allow": ["123456789", "me"]
       }
     },
     "trusted_dm": {
@@ -230,6 +230,7 @@ Notes:
 - `sources.autoDiscover: true` tells the backend to expand `sources_ro` with auto-discovered groups/channels/forums from `sources_inventory.json`.
 - `write.allow: []` means **write denied**.
 - To allow writing later, OpenClaw can edit this file and add a chat id or username to `write.allow`.
+- Add `"me"` to `write.allow` only for profiles that should be allowed to use backend-host file tools or self-account/contact mutation tools.
 - The backend reloads the JSON file automatically on the next request.
 
 ### 5. Configure the plugin
@@ -253,6 +254,7 @@ Recommended plugin config:
               "id": "owner_dm",
               "label": "Owner DM",
               "mode": "interactive",
+              "privilegedTools": true,
               "policyProfile": "owner_dm"
             },
             {
@@ -290,7 +292,9 @@ This will register tools like:
 - `telegram_sources_ro_list_topics`
 - `telegram_sources_ro_get_messages`
 
-Interactive profiles also expose the richer Telegram surface. Tool names follow the same prefix pattern, for example:
+All interactive profiles expose the baseline chat surface such as `send_message`, `send_location`, `edit_message`, `delete_message`, `forward_message`, `get_message`, `search_messages`, `get_participants`, `get_admins`, `get_chat`, `get_history`, `search_public_chats`, reactions, and topic-aware reading.
+
+Profiles with `"privilegedTools": true` additionally expose backend-host file tools and self-account/contact mutation tools. Tool names follow the same prefix pattern, for example:
 
 - messaging/media:
   - `telegram_owner_dm_send_file`
@@ -522,6 +526,8 @@ Example for adding two more trusted senders:
 ]
 ```
 
+Do not set `privilegedTools: true` on these extra trusted DM profiles unless you explicitly want them to access backend-host files and self-account/contact mutation flows.
+
 `channels.telegram-user-bridge.accounts.default`
 
 ```json
@@ -654,17 +660,16 @@ Automated tests cover backend/plugin logic, but live Telegram permissions and RP
 Recommended minimal manual checks after deployment:
 
 1. send a plain text message;
-2. send a file, voice note, sticker, and location pin;
-3. edit and delete one of your own messages;
-4. read one message, download its media, and inspect media metadata;
-5. search messages and fetch recent history from one chat;
-6. list contacts, add one test contact, then delete it;
-7. block and unblock one test user;
-8. list participants/admins on one group or channel;
-9. send/remove a reaction and fetch the reaction list;
-10. if you rely on admin workflows, test promote/demote on a disposable basic group and on a disposable supergroup; test ban/unban and recent admin actions on a disposable supergroup or channel;
-11. if you rely on onboarding flows, test invite link generation and join-by-link on a disposable group;
-12. verify that a second backend process refuses to start because `TELEGRAM_LOCK_PATH` is already held.
+2. for every interactive profile: edit/delete one of your own messages and read recent messages;
+3. for the privileged owner profile only: send a file, voice note, sticker, and location pin;
+4. for the privileged owner profile only: read one message, download its media, and inspect media metadata;
+5. for the privileged owner profile only: list contacts, add one test contact, then delete it;
+6. for the privileged owner profile only: block and unblock one test user;
+7. list participants/admins on one group or channel;
+8. send/remove a reaction and fetch the reaction list;
+9. if you rely on admin workflows, test promote/demote on a disposable basic group and on a disposable supergroup; test ban/unban and recent admin actions on a disposable supergroup or channel;
+10. if you rely on privileged onboarding/account flows, test invite link generation, join-by-link, and leave-chat on a disposable group;
+11. verify that a second backend process refuses to start because `TELEGRAM_LOCK_PATH` is already held.
 
 ## Backend configuration
 
@@ -704,6 +709,7 @@ Each profile can define:
 - `mode`
   - `interactive`
   - `sources_ro`
+- `privilegedTools`
 - `policyProfile`
 - `replyDelaySec`
 - `replyDelayMaxSec`
@@ -713,6 +719,8 @@ Each profile can define:
 - `denyWriteTo`
 
 These are backend-enforced overrides on top of the JSON policy file. If omitted, the backend uses the policy file and environment defaults.
+
+`privilegedTools: true` exposes backend-host file tools and self-account/contact mutation tools for that profile. Profiles without it still get the normal chat/message/admin reading surface, but not file/download/contact/create/join/leave flows. Any profile that uses privileged tools should also include `"me"` in backend `write.allow`.
 
 For event-driven DMs, also configure `channels.telegram-user-bridge.accounts.<id>` with:
 
