@@ -882,10 +882,12 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         custom_filter.pinned_peers = [SimpleNamespace(channel_id=101)]
         custom_filter.include_peers = [SimpleNamespace(channel_id=202), SimpleNamespace(channel_id=202)]
         custom_filter.exclude_peers = [SimpleNamespace(chat_id=303)]
-        self.mock_tg.__call__.return_value = [
-            custom_filter,
-            SimpleNamespace(id=0),  # non-custom folder; should be ignored
-        ]
+        self.mock_tg.__call__.return_value = SimpleNamespace(
+            filters=[
+                custom_filter,
+                SimpleNamespace(id=0),  # non-custom folder; should be ignored
+            ]
+        )
 
         with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
             folders = await bridge.list_dialog_folders()
@@ -928,6 +930,7 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
                 "id": 3,
                 "filter": {
                     "kind": "dialog_filter",
+                    "id": 3,
                     "title": "News",
                     "emoticon": None,
                     "contacts": False,
@@ -945,6 +948,11 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
             }
         )
 
+    async def test_upsert_dialog_folder_rejects_reserved_folder_id(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["me"])
+        with self.assertRaisesRegex(BridgeValidationError, "between 2 and 255"):
+            await bridge.upsert_dialog_folder(1, "News")
+
     async def test_delete_dialog_folder_clears_filter(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["me"])
         functions_ns = SimpleNamespace(
@@ -957,6 +965,11 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["folder_id"], 5)
         self.mock_tg.__call__.assert_awaited_once_with({"kind": "update_dialog_filter", "id": 5, "filter": None})
+
+    async def test_delete_dialog_folder_rejects_reserved_folder_id(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["me"])
+        with self.assertRaisesRegex(BridgeValidationError, "between 2 and 255"):
+            await bridge.delete_dialog_folder(1)
 
     async def test_promote_admin_supports_basic_groups(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["42", "7"])

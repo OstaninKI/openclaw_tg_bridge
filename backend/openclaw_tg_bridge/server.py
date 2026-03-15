@@ -453,7 +453,7 @@ class InviteLinkBody(BaseModel):
 
 
 class DialogFolderUpsertBody(BaseModel):
-    folder_id: int = Field(..., ge=1, le=255)
+    folder_id: int = Field(..., ge=2, le=255)
     title: str = Field(..., min_length=1, max_length=64)
     emoticon: str | None = None
     contacts: bool = False
@@ -470,7 +470,7 @@ class DialogFolderUpsertBody(BaseModel):
 
 
 class DialogFolderDeleteBody(BaseModel):
-    folder_id: int = Field(..., ge=1, le=255)
+    folder_id: int = Field(..., ge=2, le=255)
 
 
 class AdminMutationBody(BaseModel):

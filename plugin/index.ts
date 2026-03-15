@@ -404,35 +404,39 @@ async function fetchBridge(
 }
 
 function formatBridgeError(res: BridgeResponse): string {
+  const detail = (res.error || "").trim();
   if (res.status === 401) {
     return "Telegram bridge rejected plugin credentials. Check apiToken.";
   }
   if (res.status === 429) {
     if (res.retryAfter) {
-      if (res.error && /retry after/i.test(res.error)) {
-        return res.error;
+      if (detail && /retry after/i.test(detail)) {
+        return detail;
       }
-      return res.error
-        ? `${res.error} Retry after ${res.retryAfter}s.`
-        : `Telegram rate limit hit. Retry after ${res.retryAfter}s.`;
+      return detail ? `${detail} Retry after ${res.retryAfter}s.` : `Telegram rate limit hit. Retry after ${res.retryAfter}s.`;
     }
-    return res.error || "Telegram rate limit hit. Try again later.";
+    return detail || "Telegram rate limit hit. Try again later.";
   }
   if (res.status === 403 || res.status === 400) {
-    return res.error || "Telegram request was rejected.";
+    return detail || "Telegram request was rejected.";
   }
   if (res.status === 504) {
     return "Telegram API did not respond in time. Retry carefully.";
   }
+  if (res.status === 502) {
+    if (detail && detail !== "Request failed" && detail !== "Request timed out") {
+      return detail;
+    }
+    return BRIDGE_UNAVAILABLE;
+  }
   if (
-    res.status === 502 ||
     res.status === 503 ||
-    res.error === "Request failed" ||
-    res.error === "Request timed out"
+    detail === "Request failed" ||
+    detail === "Request timed out"
   ) {
     return BRIDGE_UNAVAILABLE;
   }
-  return res.error || BRIDGE_UNAVAILABLE;
+  return detail || BRIDGE_UNAVAILABLE;
 }
 
 interface PluginApi {
@@ -1909,7 +1913,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             `Create or update one Telegram dialog folder using the "${profileLabel}" context. ` +
             "Owner-only tool for managing personal channel/chat folders.",
           parameters: Type.Object({
-            folder_id: Type.Number({ minimum: 1, maximum: 255 }),
+            folder_id: Type.Number({ minimum: 2, maximum: 255 }),
             title: Type.String({ minLength: 1, maxLength: 64 }),
             emoticon: Type.Optional(Type.String()),
             contacts: Type.Optional(Type.Boolean({ default: false })),
@@ -1946,7 +1950,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             const res = await fetchBridge(api, profile, "/dialog_folders/upsert", {
               method: "POST",
               body: JSON.stringify({
-                folder_id: Math.max(1, Math.min(255, Math.trunc(params.folder_id))),
+                folder_id: Math.max(2, Math.min(255, Math.trunc(params.folder_id))),
                 title: params.title,
                 emoticon: params.emoticon ?? null,
                 contacts: params.contacts ?? false,
@@ -1983,13 +1987,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             `Delete one Telegram dialog folder using the "${profileLabel}" context. ` +
             "Owner-only tool for managing personal channel/chat folders.",
           parameters: Type.Object({
-            folder_id: Type.Number({ minimum: 1, maximum: 255 }),
+            folder_id: Type.Number({ minimum: 2, maximum: 255 }),
           }),
           async execute(_id: string, params: { folder_id: number }) {
             const res = await fetchBridge(api, profile, "/dialog_folders/delete", {
               method: "POST",
               body: JSON.stringify({
-                folder_id: Math.max(1, Math.min(255, Math.trunc(params.folder_id))),
+                folder_id: Math.max(2, Math.min(255, Math.trunc(params.folder_id))),
               }),
             });
             if (!res.ok) return toolResult(formatBridgeError(res));

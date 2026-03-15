@@ -569,6 +569,9 @@ def _map_telegram_error(exc: BaseException, *, action: str) -> BridgeError:
     if isinstance(exc, BridgeError):
         return exc
 
+    if name == "FilterIdInvalidError":
+        return BridgeValidationError("Invalid Telegram dialog folder id. Use a custom folder id between 2 and 255.")
+
     seconds = _extract_flood_wait_seconds(exc)
     if seconds is not None:
         return BridgeRateLimitError(seconds)
@@ -1670,7 +1673,13 @@ class BridgeClient:
             functions.messages.GetDialogFiltersRequest(),
             action="list dialog folders",
         )
-        filters = list(raw_filters or [])
+        raw_items = getattr(raw_filters, "filters", None)
+        if raw_items is None:
+            raw_items = raw_filters
+        try:
+            filters = list(raw_items or [])
+        except TypeError:
+            filters = []
 
         def _serialize_peer_ids(peers: Any) -> list[int]:
             ids: list[int] = []
@@ -1732,8 +1741,8 @@ class BridgeClient:
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
         _require_self_write(policy.write_scope, detail="Writing is not allowed for managing dialog folders.")
-        if folder_id < 1 or folder_id > 255:
-            raise BridgeValidationError("folder_id must be between 1 and 255.")
+        if folder_id < 2 or folder_id > 255:
+            raise BridgeValidationError("folder_id must be between 2 and 255.")
         title = (title or "").strip()
         if not title:
             raise BridgeValidationError("title is required.")
@@ -1754,6 +1763,7 @@ class BridgeClient:
             return resolved
 
         dialog_filter = types.DialogFilter(
+            id=folder_id,
             title=title,
             emoticon=emoticon_value,
             contacts=bool(contacts),
@@ -1786,8 +1796,8 @@ class BridgeClient:
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
         _require_self_write(policy.write_scope, detail="Writing is not allowed for deleting dialog folders.")
-        if folder_id < 1 or folder_id > 255:
-            raise BridgeValidationError("folder_id must be between 1 and 255.")
+        if folder_id < 2 or folder_id > 255:
+            raise BridgeValidationError("folder_id must be between 2 and 255.")
         functions = _telethon_functions()
         await self._call_telegram(
             self._client.__call__,

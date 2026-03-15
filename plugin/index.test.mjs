@@ -291,6 +291,41 @@ test("owner dialog-folder tools call backend endpoints", async () => {
   assert.match(deleteRes.content[0].text, /deleted/i);
 });
 
+test("dialog-folder tools normalize reserved folder ids to 2", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "owner_dm", label: "Owner", privilegedTools: true, policyProfile: "owner_dm" }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  const payloads = [];
+  globalThis.fetch = async (_url, init = {}) => {
+    payloads.push(JSON.parse(String(init.body || "{}")));
+    return new Response(JSON.stringify({ ok: true, folder_id: 2 }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  await getTool(api, "telegram_owner_dm_upsert_dialog_folder").execute("1", {
+    folder_id: 1,
+    title: "News",
+  });
+  await getTool(api, "telegram_owner_dm_delete_dialog_folder").execute("2", {
+    folder_id: 1,
+  });
+
+  assert.equal(payloads[0].folder_id, 2);
+  assert.equal(payloads[1].folder_id, 2);
+});
+
 test("plugin sends reaction and block user via backend endpoints", async () => {
   const api = createApi();
   register(api);
@@ -533,6 +568,23 @@ test("plugin maps backend timeout to bridge unavailable text", async () => {
   const result = await dialogsTool.execute("1", {});
 
   assert.match(result.content[0].text, /Telegram bridge is unavailable/);
+});
+
+test("plugin preserves backend 502 detail instead of masking as bridge unavailable", async () => {
+  const api = createApi();
+  register(api);
+
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ detail: "Invalid Telegram dialog folder id. Use a custom folder id between 2 and 255." }), {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    });
+
+  const tool = getTool(api, "telegram_user_get_dialogs");
+  const result = await tool.execute("1", {});
+
+  assert.match(result.content[0].text, /Invalid Telegram dialog folder id/);
+  assert.doesNotMatch(result.content[0].text, /bridge is unavailable/i);
 });
 
 test("plugin registers DM channel and channel outbound uses backend send_message", async () => {
