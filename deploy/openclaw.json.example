@@ -80,7 +80,7 @@
       {
         "id": "owner-agent",
         "tools": {
-          "allow": [
+          "alsoAllow": [
             "telegram_owner_dm_get_dialogs",
             "telegram_owner_dm_list_topics",
             "telegram_owner_dm_get_messages",
@@ -99,7 +99,7 @@
       {
         "id": "trusted-agent",
         "tools": {
-          "allow": [
+          "alsoAllow": [
             "telegram_trusted_dm_get_dialogs",
             "telegram_trusted_dm_list_topics",
             "telegram_trusted_dm_get_messages",

@@ -762,6 +762,11 @@ function validateStrictDmAccountConfig(
   // Strict DM routing assumes dedicated agents; if an explicit allowlist exists but excludes
   // telegram_* tools, OpenClaw falls back to core tools in-session, which breaks owner actions.
   const configuredAgents = ((cfg.agents as Record<string, unknown> | undefined)?.list ?? []) as Array<unknown>;
+  const globalToolsConfig = (cfg.tools as Record<string, unknown> | undefined) ?? undefined;
+  const globalToolsProfile =
+    typeof globalToolsConfig?.profile === "string" && globalToolsConfig.profile.trim()
+      ? globalToolsConfig.profile.trim()
+      : null;
   const byAgentId = new Map<string, Record<string, unknown>>();
   for (const rawAgent of configuredAgents) {
     if (!rawAgent || typeof rawAgent !== "object") continue;
@@ -789,9 +794,28 @@ function validateStrictDmAccountConfig(
     const allow = allowRaw
       .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
       .map((value) => value.trim());
-    const hasTelegramTool = allow.some((toolName) =>
+    const alsoAllowRaw = tools.alsoAllow;
+    const alsoAllow = Array.isArray(alsoAllowRaw)
+      ? alsoAllowRaw
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .map((value) => value.trim())
+      : [];
+    const matchesTelegramPrefix = (toolName: string): boolean =>
       expectedToolPrefixes.some((prefix) => toolName === prefix || toolName.startsWith(`${prefix}_`))
-    );
+    const hasTelegramInAllow = allow.some((toolName) => matchesTelegramPrefix(toolName));
+    const hasTelegramInAlsoAllow = alsoAllow.some((toolName) => matchesTelegramPrefix(toolName));
+    const hasNonTelegramInAllow = allow.some((toolName) => !matchesTelegramPrefix(toolName));
+    const activeToolsProfile =
+      (typeof tools.profile === "string" && tools.profile.trim() ? tools.profile.trim() : null) ?? globalToolsProfile;
+
+    if (activeToolsProfile && hasTelegramInAllow && !hasNonTelegramInAllow && !hasTelegramInAlsoAllow) {
+      errors.push(
+        `account "${account.accountId}": agent "${agentId}" uses tools.profile="${activeToolsProfile}" and plugin-only tools.allow; use tools.alsoAllow for telegram_* tools to avoid policy stripping`
+      );
+      continue;
+    }
+
+    const hasTelegramTool = hasTelegramInAllow || hasTelegramInAlsoAllow;
     if (hasTelegramTool) continue;
     const expected = expectedToolPrefixes
       .slice(0, 3)

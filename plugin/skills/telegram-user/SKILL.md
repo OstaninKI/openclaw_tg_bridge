@@ -20,6 +20,7 @@ The same Telegram account may be exposed to multiple OpenClaw contexts, for exam
 - Writing is **denied by default**. If a send tool says writing is not allowed, do not retry with another identifier for the same chat. Ask the user to grant write access first.
 - Some interactive profiles may expose only the baseline chat surface. Backend-host file tools and self-account/contact mutation tools exist only on profiles explicitly configured with `privilegedTools: true` and backend `write.allow` containing `"me"`.
 - Channel join by link and dialog-folder management are owner-only in this plugin and are exposed only for profiles with ids that start with `owner`.
+- If OpenClaw agents use global `tools.profile` (for example `coding`), enable Telegram plugin tools via `tools.alsoAllow`. Plugin-only `tools.allow` can be stripped by policy pipeline.
 - If OpenClaw agents use explicit `tools.allow`, owner agent allowlist must include `telegram_<context>_join_chat_by_link` for channel join flows.
 - Compatibility aliases: if only one owner profile exists and its id is exactly `owner` or `owner_dm`, the plugin also exposes the alternate prefix (`telegram_owner_*` and `telegram_owner_dm_*`) to avoid allowlist/profile-id drift.
 - If a tool returns that the bridge is unavailable, tell the user once and do not retry repeatedly.

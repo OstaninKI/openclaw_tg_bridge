@@ -2358,6 +2358,99 @@ test("strict DM validation accepts bound agent allowlist with telegram tools", (
   assert.equal(errors.length, 0);
 });
 
+test("strict DM validation fails for plugin-only tools.allow under tools.profile", () => {
+  const errors = __test.validateStrictDmAccountConfig(
+    {
+      tools: {
+        profile: "coding",
+      },
+      agents: {
+        list: [
+          {
+            id: "owner-agent",
+            tools: {
+              allow: ["telegram_owner_dm_send_message", "telegram_owner_dm_get_dialogs"],
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "owner-agent",
+          match: {
+            channel: "telegram-user-bridge",
+            accountId: "default",
+            peer: { kind: "direct", id: "123456789" },
+          },
+        },
+      ],
+    },
+    {
+      accountId: "default",
+      defaultAccountId: "default",
+      enabled: true,
+      label: "Telegram User DM",
+      baseUrl: "http://127.0.0.1:8765",
+      strictPeerBindings: true,
+      timeoutMs: 30000,
+      pollTimeoutMs: 25000,
+      pollIntervalMs: 1500,
+      allowFrom: ["123456789"],
+      writeTo: ["123456789"],
+    },
+    ["telegram_owner_dm", "telegram_owner"]
+  );
+
+  assert.match(errors.join("\n"), /plugin-only tools\.allow; use tools\.alsoAllow/);
+});
+
+test("strict DM validation accepts plugin tools from tools.alsoAllow under tools.profile", () => {
+  const errors = __test.validateStrictDmAccountConfig(
+    {
+      tools: {
+        profile: "coding",
+      },
+      agents: {
+        list: [
+          {
+            id: "owner-agent",
+            tools: {
+              allow: ["telegram_owner_dm_send_message"],
+              alsoAllow: ["telegram_owner_dm_get_dialogs", "telegram_owner_dm_join_chat_by_link"],
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "owner-agent",
+          match: {
+            channel: "telegram-user-bridge",
+            accountId: "default",
+            peer: { kind: "direct", id: "123456789" },
+          },
+        },
+      ],
+    },
+    {
+      accountId: "default",
+      defaultAccountId: "default",
+      enabled: true,
+      label: "Telegram User DM",
+      baseUrl: "http://127.0.0.1:8765",
+      strictPeerBindings: true,
+      timeoutMs: 30000,
+      pollTimeoutMs: 25000,
+      pollIntervalMs: 1500,
+      allowFrom: ["123456789"],
+      writeTo: ["123456789"],
+    },
+    ["telegram_owner_dm", "telegram_owner"]
+  );
+
+  assert.equal(errors.length, 0);
+});
+
 test("strict DM validation fails for bound agent with acp runtime", () => {
   const errors = __test.validateStrictDmAccountConfig(
     {

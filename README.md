@@ -466,7 +466,7 @@ In this mode, startup validation expects:
 
 ### 7. Bind tools to separate agents
 
-Give each OpenClaw agent only its own tools:
+Add bridge tools to each OpenClaw agent:
 
 ```json5
 {
@@ -475,7 +475,7 @@ Give each OpenClaw agent only its own tools:
       {
         "id": "owner-agent",
         "tools": {
-          "allow": [
+          "alsoAllow": [
             "telegram_owner_dm_get_dialogs",
             "telegram_owner_dm_list_topics",
             "telegram_owner_dm_get_messages",
@@ -494,7 +494,7 @@ Give each OpenClaw agent only its own tools:
       {
         "id": "trusted-agent",
         "tools": {
-          "allow": [
+          "alsoAllow": [
             "telegram_trusted_dm_get_dialogs",
             "telegram_trusted_dm_list_topics",
             "telegram_trusted_dm_get_messages",
@@ -511,6 +511,8 @@ Give each OpenClaw agent only its own tools:
 }
 ```
 
+If global `tools.profile` is set (for example `coding`), use `tools.alsoAllow` for Telegram plugin tools.
+Using plugin-only `tools.allow` under a profile can be stripped by policy pipeline and leave only core tools.
 If agents use explicit `tools.allow`, include `telegram_owner_dm_join_chat_by_link` for the owner profile, otherwise the agent cannot self-join channels from `t.me` links.
 Dialog-folder management tools are owner-only and are registered only for profile ids that start with `owner` (for example `owner_dm`).
 Compatibility note: if only one owner profile exists with id `owner` or `owner_dm`, the plugin also registers the alternate owner prefix as aliases (`telegram_owner_*` and `telegram_owner_dm_*`) to reduce migration mismatches between profile id and `tools.allow`.
@@ -616,7 +618,7 @@ Do not set `privilegedTools: true` on these extra trusted DM profiles unless you
   {
     "id": "trusted-alice-agent",
     "tools": {
-      "allow": [
+      "alsoAllow": [
         "telegram_trusted_alice_dm_get_dialogs",
         "telegram_trusted_alice_dm_list_topics",
         "telegram_trusted_alice_dm_get_messages",
@@ -631,7 +633,7 @@ Do not set `privilegedTools: true` on these extra trusted DM profiles unless you
   {
     "id": "trusted-bob-agent",
     "tools": {
-      "allow": [
+      "alsoAllow": [
         "telegram_trusted_bob_dm_get_dialogs",
         "telegram_trusted_bob_dm_list_topics",
         "telegram_trusted_bob_dm_get_messages",
@@ -826,6 +828,7 @@ With `strictPeerBindings: true`, the plugin accepts inbound DMs only when `cfg.b
 `markReadOnInbound: false` disables Telegram read receipts for accepted inbound DMs on this channel account. When enabled, read status is sent only for DMs that are allowed for interaction, not merely readable.
 `typingWhileReplying: false` disables Telegram typing status while OpenClaw is generating a DM reply on this channel account.
 In strict mode, startup validation now also checks bound agents with explicit `tools.allow`: at least one `telegram_<context>_*` tool must be present, otherwise channel startup fails fast with a clear config error instead of silently falling back to core tools.
+When global or agent-level `tools.profile` is active, strict mode also fails startup for plugin-only `tools.allow` and asks to move Telegram tools into `tools.alsoAllow`.
 Strict mode also fails startup when a bound agent resolves to `runtime.type=acp`, because ACP runtime setups may expose only ACP developer tools to the model and hide plugin-generated tools.
 Inbound DM media auto-download is enabled by default in backend (`TELEGRAM_DM_AUTO_DOWNLOAD_MEDIA=true`) and stores files under `TELEGRAM_DM_MEDIA_PATH`. Download happens only for DMs that pass this account's interaction allowlist at poll time.
 The channel also retries `/dm/inbox/ack` with a short request-level backoff, because ack is idempotent and safe to retry; the full inbound reply flow is not retried wholesale.
