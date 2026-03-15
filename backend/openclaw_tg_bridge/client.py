@@ -21,6 +21,7 @@ else:
 
 MAX_MESSAGE_LENGTH = 4096
 OBSERVED_PEER_CACHE_SIZE = 512
+MAX_CONTACT_VCARD_LENGTH = 512
 
 
 class BridgeError(Exception):
@@ -270,12 +271,14 @@ def _extract_geo_summary(message: Any) -> dict[str, Any]:
 
 def _extract_contact_summary(message: Any) -> dict[str, Any]:
     media = getattr(message, "media", None)
+    raw_vcard = getattr(media, "vcard", None)
+    contact_vcard = raw_vcard[:MAX_CONTACT_VCARD_LENGTH] if isinstance(raw_vcard, str) else raw_vcard
     return {
         "contact_phone": getattr(media, "phone_number", None),
         "contact_first_name": getattr(media, "first_name", None),
         "contact_last_name": getattr(media, "last_name", None),
         "contact_user_id": _extract_peer_id(getattr(media, "user_id", None)),
-        "contact_vcard": getattr(media, "vcard", None),
+        "contact_vcard": contact_vcard,
     }
 
 

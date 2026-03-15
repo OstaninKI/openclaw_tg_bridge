@@ -97,7 +97,7 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `contact_first_name`
   - `contact_last_name`
   - `contact_user_id`
-  - `contact_vcard`
+  - `contact_vcard` (truncated to 512 chars)
   - `latitude` / `longitude`
 - Auto-discovery of sourceable dialogs for `sources_ro`:
   - channels

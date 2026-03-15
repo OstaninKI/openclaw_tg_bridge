@@ -15,6 +15,7 @@ try:
         DmPeerBody,
         HTTPException,
         _apply_source_discovery,
+        _guess_dm_media_extension,
         _recover_dm_events,
         _enrich_dm_events_with_downloaded_media,
         _source_entry_matches_policy,
@@ -29,6 +30,7 @@ except ModuleNotFoundError as exc:
     DmPeerBody = None
     HTTPException = None
     _apply_source_discovery = None
+    _guess_dm_media_extension = None
     _recover_dm_events = None
     _enrich_dm_events_with_downloaded_media = None
     _source_entry_matches_policy = None
@@ -102,6 +104,10 @@ class TestServerSourceDiscovery(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(_source_entry_matches_policy(entry, {"read_deny_chat_ids": ["-1001"]}))
         self.assertFalse(_source_entry_matches_policy(entry, {"read_deny_chat_ids": ["@news"]}))
         self.assertTrue(_source_entry_matches_policy(entry, {"read_deny_chat_ids": ["-1002"]}))
+
+    def test_guess_dm_media_extension_rejects_injected_suffix(self) -> None:
+        self.assertEqual(_guess_dm_media_extension("photo.jpg | type:virus", None), ".bin")
+        self.assertEqual(_guess_dm_media_extension("photo.jpg | type:virus", "image/jpeg"), ".jpg")
 
     async def test_recover_dm_events_skips_unresolved_numeric_peer(self) -> None:
         bridge = AsyncMock()

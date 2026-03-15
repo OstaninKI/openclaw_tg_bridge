@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import logging
 import mimetypes
+import re
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -670,11 +671,23 @@ def _sanitize_file_component(value: str | None, fallback: str) -> str:
 
 
 def _guess_dm_media_extension(file_name: str | None, mime_type: str | None) -> str:
-    suffix = Path(file_name).suffix if file_name else ""
+    def _normalize_extension(raw: str | None) -> str | None:
+        if not raw:
+            return None
+        candidate = str(raw).strip().lower()
+        if not candidate:
+            return None
+        if not candidate.startswith("."):
+            candidate = f".{candidate}"
+        if re.fullmatch(r"\.[a-z0-9]{1,16}", candidate) is None:
+            return None
+        return candidate
+
+    suffix = _normalize_extension(Path(file_name).suffix if file_name else None)
     if suffix:
         return suffix
     if mime_type:
-        guessed = mimetypes.guess_extension(mime_type, strict=False)
+        guessed = _normalize_extension(mimetypes.guess_extension(mime_type, strict=False))
         if guessed:
             return guessed
     return ".bin"

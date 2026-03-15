@@ -624,6 +624,32 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message["contact_user_id"], 7001)
         self.assertEqual(message["contact_vcard"], "BEGIN:VCARD")
 
+    async def test_get_message_truncates_large_contact_vcard(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        long_vcard = "BEGIN:VCARD\n" + ("X" * 2000)
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_messages.return_value = SimpleNamespace(
+            id=73,
+            text="",
+            date=datetime(2026, 3, 14, 10, 0, tzinfo=timezone.utc),
+            out=False,
+            sender_id=7,
+            media=SimpleNamespace(
+                phone_number="+12025550123",
+                first_name="Alice",
+                last_name="Example",
+                user_id=7001,
+                vcard=long_vcard,
+            ),
+            entities=[],
+        )
+
+        message = await bridge.get_message("42", 73)
+
+        self.assertEqual(len(message["contact_vcard"]), 512)
+        self.assertTrue(message["contact_vcard"].startswith("BEGIN:VCARD"))
+
     async def test_download_media_fetches_message_once_and_serializes_it(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"], write_allow_chat_ids=["me", "42"])
         entity = SimpleNamespace(id=42, username="allowed")

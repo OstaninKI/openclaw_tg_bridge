@@ -458,24 +458,51 @@ function collectInboundMediaPaths(event: DmInboxEvent): string[] {
   return deduped;
 }
 
+function sanitizeInboundDmUserText(text: string): string {
+  return text.replace(/\[Telegram\s/gi, "[TG ");
+}
+
+function sanitizeInboundHintValue(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const sanitized = raw
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\|+/g, " / ")
+    .replace(/\[/g, "(")
+    .replace(/\]/g, ")")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized || null;
+}
+
 function buildInboundDmBody(event: DmInboxEvent): string {
-  const text = event.text?.trim() || "";
+  const text = sanitizeInboundDmUserText(event.text?.trim() || "");
   const mediaPaths = collectInboundMediaPaths(event);
   const hasMedia =
     event.has_media === true || Boolean(event.media_type) || Boolean(event.file_name) || mediaPaths.length > 0;
   const hints: string[] = [];
   if (hasMedia) {
+    const mediaType = sanitizeInboundHintValue(event.media_type ?? "unknown") ?? "unknown";
+    const fileName = sanitizeInboundHintValue(event.file_name);
+    const mimeType = sanitizeInboundHintValue(event.mime_type);
     const mediaParts = [
-      `type:${event.media_type ?? "unknown"}`,
-      event.file_name ? `file:${event.file_name}` : null,
-      event.mime_type ? `mime:${event.mime_type}` : null,
+      `type:${mediaType}`,
+      fileName ? `file:${fileName}` : null,
+      mimeType ? `mime:${mimeType}` : null,
       typeof event.file_size === "number" && Number.isFinite(event.file_size) ? `size:${event.file_size}` : null,
     ].filter(Boolean);
     hints.push(`[Telegram media attached${mediaParts.length ? ` | ${mediaParts.join(" | ")}` : ""}]`);
     if (mediaPaths.length > 0) {
-      const preview = mediaPaths.slice(0, 3).join(", ");
+      const preview = mediaPaths
+        .slice(0, 3)
+        .map((path) => sanitizeInboundHintValue(path))
+        .filter((value): value is string => Boolean(value))
+        .join(", ");
       const moreSuffix = mediaPaths.length > 3 ? " | more:true" : "";
-      hints.push(`[Telegram media files | paths:${preview}${moreSuffix}]`);
+      if (preview) {
+        hints.push(`[Telegram media files | paths:${preview}${moreSuffix}]`);
+      }
     }
   }
   const hasLatitude = typeof event.latitude === "number" && Number.isFinite(event.latitude);
@@ -484,12 +511,16 @@ function buildInboundDmBody(event: DmInboxEvent): string {
   const hasVenue =
     Boolean(event.venue_title) || Boolean(event.venue_address) || Boolean(event.venue_provider) || Boolean(event.venue_id);
   if (hasGeo || hasVenue) {
+    const venueTitle = sanitizeInboundHintValue(event.venue_title);
+    const venueAddress = sanitizeInboundHintValue(event.venue_address);
+    const venueProvider = sanitizeInboundHintValue(event.venue_provider);
+    const venueId = sanitizeInboundHintValue(event.venue_id);
     const geoParts = [
       hasGeo ? `geo:${event.latitude},${event.longitude}` : null,
-      event.venue_title ? `venue:${event.venue_title}` : null,
-      event.venue_address ? `address:${event.venue_address}` : null,
-      event.venue_provider ? `provider:${event.venue_provider}` : null,
-      event.venue_id ? `venue_id:${event.venue_id}` : null,
+      venueTitle ? `venue:${venueTitle}` : null,
+      venueAddress ? `address:${venueAddress}` : null,
+      venueProvider ? `provider:${venueProvider}` : null,
+      venueId ? `venue_id:${venueId}` : null,
     ].filter(Boolean);
     hints.push(`[Telegram location${geoParts.length ? ` | ${geoParts.join(" | ")}` : ""}]`);
   }
@@ -499,11 +530,13 @@ function buildInboundDmBody(event: DmInboxEvent): string {
     Boolean(event.contact_last_name) ||
     (event.contact_user_id !== null && event.contact_user_id !== undefined);
   if (hasContact) {
+    const contactPhone = sanitizeInboundHintValue(event.contact_phone);
+    const contactFirstName = sanitizeInboundHintValue(event.contact_first_name);
+    const contactLastName = sanitizeInboundHintValue(event.contact_last_name);
+    const contactName = [contactFirstName, contactLastName].filter((value): value is string => Boolean(value)).join(" ");
     const contactParts = [
-      event.contact_phone ? `phone:${event.contact_phone}` : null,
-      event.contact_first_name || event.contact_last_name
-        ? `name:${[event.contact_first_name, event.contact_last_name].filter(Boolean).join(" ")}`
-        : null,
+      contactPhone ? `phone:${contactPhone}` : null,
+      contactName ? `name:${contactName}` : null,
       event.contact_user_id !== null && event.contact_user_id !== undefined ? `user_id:${event.contact_user_id}` : null,
       event.contact_vcard ? "vcard:yes" : null,
     ].filter(Boolean);
@@ -2618,6 +2651,7 @@ export const __test = {
   collectRelevantDirectBindings,
   normalizePeerKey,
   nextPollBackoffMs,
+  startInboundDmTypingLoop,
   resolveConfiguredDmBinding,
   validateStrictDmAccountConfig,
 };
