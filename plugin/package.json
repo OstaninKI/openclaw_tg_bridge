@@ -1,5 +1,5 @@
 {
-  "name": "openclaw-unofficial-telegram-user-bridge",
+  "name": "telegram-user-bridge",
   "version": "0.1.0",
   "description": "OpenClaw plugin: agent tools for a live Telegram user account via Telethon bridge",
   "type": "module",
