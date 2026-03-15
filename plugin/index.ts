@@ -81,6 +81,25 @@ type DmInboxEvent = {
   sender_name?: string;
   sender_username?: string;
   date?: string;
+  has_media?: boolean;
+  media_type?: string | null;
+  file_name?: string | null;
+  mime_type?: string | null;
+  file_size?: number | null;
+  media_path?: string | null;
+  media_paths?: string[] | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  venue_title?: string | null;
+  venue_address?: string | null;
+  venue_provider?: string | null;
+  venue_id?: string | null;
+  contact_phone?: string | null;
+  contact_first_name?: string | null;
+  contact_last_name?: string | null;
+  contact_user_id?: string | number | null;
+  contact_vcard?: string | null;
+  entities?: Array<{ type?: string; text?: string; url?: string }>;
 };
 
 function toolResult(text: string): ToolContent {
@@ -412,6 +431,100 @@ function normalizePeerKey(value: unknown): string | null {
     }
   }
   return normalized.toLowerCase();
+}
+
+function isValidDmInboxEvent(event: unknown): event is DmInboxEvent {
+  if (!event || typeof event !== "object") return false;
+  const candidate = event as { id?: unknown; sender_id?: unknown };
+  if (!Number.isInteger(candidate.id) || Number(candidate.id) <= 0) return false;
+  const sender = candidate.sender_id;
+  if (typeof sender !== "string" && typeof sender !== "number") return false;
+  if (typeof sender === "number" && !Number.isFinite(sender)) return false;
+  return normalizePeerKey(sender) !== null;
+}
+
+function collectInboundMediaPaths(event: DmInboxEvent): string[] {
+  const rawPaths = [
+    typeof event.media_path === "string" ? event.media_path.trim() : "",
+    ...(Array.isArray(event.media_paths) ? event.media_paths.map((item) => String(item).trim()) : []),
+  ].filter((item): item is string => Boolean(item));
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const path of rawPaths) {
+    if (seen.has(path)) continue;
+    seen.add(path);
+    deduped.push(path);
+  }
+  return deduped;
+}
+
+function buildInboundDmBody(event: DmInboxEvent): string {
+  const text = event.text?.trim() || "";
+  const mediaPaths = collectInboundMediaPaths(event);
+  const hasMedia =
+    event.has_media === true || Boolean(event.media_type) || Boolean(event.file_name) || mediaPaths.length > 0;
+  const hints: string[] = [];
+  if (hasMedia) {
+    const mediaParts = [
+      `type:${event.media_type ?? "unknown"}`,
+      event.file_name ? `file:${event.file_name}` : null,
+      event.mime_type ? `mime:${event.mime_type}` : null,
+      typeof event.file_size === "number" && Number.isFinite(event.file_size) ? `size:${event.file_size}` : null,
+    ].filter(Boolean);
+    hints.push(`[Telegram media attached${mediaParts.length ? ` | ${mediaParts.join(" | ")}` : ""}]`);
+    if (mediaPaths.length > 0) {
+      const preview = mediaPaths.slice(0, 3).join(", ");
+      const moreSuffix = mediaPaths.length > 3 ? " | more:true" : "";
+      hints.push(`[Telegram media files | paths:${preview}${moreSuffix}]`);
+    }
+  }
+  const hasLatitude = typeof event.latitude === "number" && Number.isFinite(event.latitude);
+  const hasLongitude = typeof event.longitude === "number" && Number.isFinite(event.longitude);
+  const hasGeo = hasLatitude && hasLongitude;
+  const hasVenue =
+    Boolean(event.venue_title) || Boolean(event.venue_address) || Boolean(event.venue_provider) || Boolean(event.venue_id);
+  if (hasGeo || hasVenue) {
+    const geoParts = [
+      hasGeo ? `geo:${event.latitude},${event.longitude}` : null,
+      event.venue_title ? `venue:${event.venue_title}` : null,
+      event.venue_address ? `address:${event.venue_address}` : null,
+      event.venue_provider ? `provider:${event.venue_provider}` : null,
+      event.venue_id ? `venue_id:${event.venue_id}` : null,
+    ].filter(Boolean);
+    hints.push(`[Telegram location${geoParts.length ? ` | ${geoParts.join(" | ")}` : ""}]`);
+  }
+  const hasContact =
+    Boolean(event.contact_phone) ||
+    Boolean(event.contact_first_name) ||
+    Boolean(event.contact_last_name) ||
+    (event.contact_user_id !== null && event.contact_user_id !== undefined);
+  if (hasContact) {
+    const contactParts = [
+      event.contact_phone ? `phone:${event.contact_phone}` : null,
+      event.contact_first_name || event.contact_last_name
+        ? `name:${[event.contact_first_name, event.contact_last_name].filter(Boolean).join(" ")}`
+        : null,
+      event.contact_user_id !== null && event.contact_user_id !== undefined ? `user_id:${event.contact_user_id}` : null,
+      event.contact_vcard ? "vcard:yes" : null,
+    ].filter(Boolean);
+    hints.push(`[Telegram contact${contactParts.length ? ` | ${contactParts.join(" | ")}` : ""}]`);
+  }
+  const entitySamples = Array.isArray(event.entities) ? event.entities : [];
+  if (entitySamples.length > 0) {
+    const summarized = entitySamples
+      .slice(0, 3)
+      .map((entity) => entity?.type || "entity")
+      .filter((item): item is string => Boolean(item));
+    if (summarized.length > 0) {
+      const suffix = entitySamples.length > 3 ? " | more:true" : "";
+      hints.push(`[Telegram entities | ${summarized.join(",")}${suffix}]`);
+    }
+  }
+  const content = text || "[Non-text Telegram message]";
+  if (hints.length === 0) {
+    return content;
+  }
+  return `${content}\n\n${hints.join("\n")}`;
 }
 
 function resolveConfiguredDmBinding(
@@ -799,7 +912,7 @@ async function processInboundDmEvent(params: {
     sessionKey,
   });
   const envelopeOptions = (core.reply.resolveEnvelopeFormatOptions as (...args: unknown[]) => unknown)(params.cfg);
-  const rawBody = params.event.text?.trim() || "[Non-text Telegram message]";
+  const rawBody = buildInboundDmBody(params.event);
   const fromLabel =
     params.event.sender_name ||
     (params.event.sender_username ? `@${params.event.sender_username}` : `user:${senderId}`);
@@ -812,6 +925,8 @@ async function processInboundDmEvent(params: {
     body: rawBody,
   });
   const normalizedTarget = buildDmTarget(senderId);
+  const mediaPaths = collectInboundMediaPaths(params.event);
+  const primaryMediaPath = mediaPaths[0];
   const ctxPayload = (core.reply.finalizeInboundContext as (...args: unknown[]) => Record<string, unknown>)({
     Body: body,
     BodyForAgent: rawBody,
@@ -827,6 +942,35 @@ async function processInboundDmEvent(params: {
     SenderName: params.event.sender_name ?? undefined,
     SenderId: senderId,
     SenderUsername: params.event.sender_username ?? undefined,
+    HasMedia: params.event.has_media === true || mediaPaths.length > 0 || undefined,
+    MediaType: params.event.media_type ?? undefined,
+    MediaTypes: params.event.media_type ? [params.event.media_type] : undefined,
+    MediaFileName: params.event.file_name ?? undefined,
+    MediaMimeType: params.event.mime_type ?? undefined,
+    MediaFileSize: params.event.file_size ?? undefined,
+    MediaPath: primaryMediaPath,
+    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+    Latitude:
+      typeof params.event.latitude === "number" && Number.isFinite(params.event.latitude)
+        ? params.event.latitude
+        : undefined,
+    Longitude:
+      typeof params.event.longitude === "number" && Number.isFinite(params.event.longitude)
+        ? params.event.longitude
+        : undefined,
+    VenueTitle: params.event.venue_title ?? undefined,
+    VenueAddress: params.event.venue_address ?? undefined,
+    VenueProvider: params.event.venue_provider ?? undefined,
+    VenueId: params.event.venue_id ?? undefined,
+    ContactPhone: params.event.contact_phone ?? undefined,
+    ContactFirstName: params.event.contact_first_name ?? undefined,
+    ContactLastName: params.event.contact_last_name ?? undefined,
+    ContactUserId:
+      params.event.contact_user_id !== null && params.event.contact_user_id !== undefined
+        ? String(params.event.contact_user_id)
+        : undefined,
+    ContactVCard: params.event.contact_vcard ?? undefined,
+    MessageEntities: Array.isArray(params.event.entities) ? params.event.entities : undefined,
     CommandAuthorized: true,
     Provider: CHANNEL_ID,
     Surface: CHANNEL_ID,
@@ -852,7 +996,11 @@ async function processInboundDmEvent(params: {
   let typingHandle: { stop: () => Promise<void> } | null = null;
   try {
     if (params.account.markReadOnInbound) {
-      await markInboundDmRead(params.account, params.event);
+      try {
+        await markInboundDmRead(params.account, params.event);
+      } catch (error) {
+        params.api.logger?.warn(`telegram-user-bridge DM read receipt failed: ${String(error)}`);
+      }
     }
     if (params.account.typingWhileReplying) {
       typingHandle = await startInboundDmTypingLoop({
@@ -917,9 +1065,11 @@ async function startDmChannelMonitor(params: {
         lastError: null,
         retryInMs: 0,
       });
-      const events = ((response.data as { events?: DmInboxEvent[] } | undefined)?.events ?? []).filter(
-        (event): event is DmInboxEvent => typeof event?.id === "number"
-      );
+      const rawEvents = (response.data as { events?: unknown[] } | undefined)?.events ?? [];
+      const events = rawEvents.filter(isValidDmInboxEvent);
+      if (events.length !== rawEvents.length) {
+        params.api.logger?.warn("telegram-user-bridge DM poll returned malformed events; skipping invalid entries");
+      }
       if (events.length === 0) {
         continue;
       }

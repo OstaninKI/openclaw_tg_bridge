@@ -595,6 +595,35 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message["latitude"], 35.1)
         self.assertEqual(message["longitude"], 33.4)
 
+    async def test_get_message_includes_contact_metadata(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_messages.return_value = SimpleNamespace(
+            id=72,
+            text="",
+            date=datetime(2026, 3, 14, 10, 0, tzinfo=timezone.utc),
+            out=False,
+            sender_id=7,
+            media=SimpleNamespace(
+                phone_number="+12025550123",
+                first_name="Alice",
+                last_name="Example",
+                user_id=7001,
+                vcard="BEGIN:VCARD",
+            ),
+            entities=[],
+        )
+
+        message = await bridge.get_message("42", 72)
+
+        self.assertTrue(message["has_media"])
+        self.assertEqual(message["contact_phone"], "+12025550123")
+        self.assertEqual(message["contact_first_name"], "Alice")
+        self.assertEqual(message["contact_last_name"], "Example")
+        self.assertEqual(message["contact_user_id"], 7001)
+        self.assertEqual(message["contact_vcard"], "BEGIN:VCARD")
+
     async def test_download_media_fetches_message_once_and_serializes_it(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"], write_allow_chat_ids=["me", "42"])
         entity = SimpleNamespace(id=42, username="allowed")
@@ -618,6 +647,38 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["message"]["id"], 71)
         self.mock_tg.get_messages.assert_awaited_once_with(entity, ids=71)
         self.mock_tg.download_media.assert_awaited_once_with(tg_message, file="/tmp/out.bin")
+
+    async def test_download_media_for_inbox_uses_read_scope_only(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"], write_allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        tg_message = SimpleNamespace(
+            id=81,
+            media=SimpleNamespace(),
+        )
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_messages.return_value = tg_message
+        self.mock_tg.download_media.return_value = "/tmp/inbox/81_photo.jpg"
+
+        downloaded = await bridge.download_media_for_inbox("42", 81, output_path="/tmp/inbox/81_photo.jpg")
+
+        self.assertEqual(downloaded, "/tmp/inbox/81_photo.jpg")
+        self.mock_tg.get_messages.assert_awaited_once_with(entity, ids=81)
+        self.mock_tg.download_media.assert_awaited_once_with(tg_message, file="/tmp/inbox/81_photo.jpg")
+
+    async def test_download_media_for_inbox_returns_none_for_non_media_message(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        tg_message = SimpleNamespace(
+            id=82,
+            media=None,
+        )
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_messages.return_value = tg_message
+
+        downloaded = await bridge.download_media_for_inbox("42", 82, output_path="/tmp/inbox/82.bin")
+
+        self.assertIsNone(downloaded)
+        self.mock_tg.download_media.assert_not_awaited()
 
     async def test_search_messages_serializes_results(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"])

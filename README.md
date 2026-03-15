@@ -91,6 +91,13 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `media_type`
   - `file_name`
   - `mime_type`
+  - `media_path` (auto-downloaded inbound DM attachment path when available)
+  - `media_paths` (array form for agent context compatibility)
+  - `contact_phone`
+  - `contact_first_name`
+  - `contact_last_name`
+  - `contact_user_id`
+  - `contact_vcard`
   - `latitude` / `longitude`
 - Auto-discovery of sourceable dialogs for `sources_ro`:
   - channels
@@ -752,6 +759,8 @@ Environment variables:
 | `TELEGRAM_POLICY_DEFAULT_PROFILE` | Optional default backend policy profile |
 | `TELEGRAM_SOURCES_INVENTORY_PATH` | Path to JSON inventory of discovered source dialogs |
 | `TELEGRAM_INBOX_STATE_PATH` | Path to JSON file with acknowledged inbound DM cursors |
+| `TELEGRAM_DM_AUTO_DOWNLOAD_MEDIA` | Auto-download inbound DM attachments during `/dm/inbox/poll` (default `true`) |
+| `TELEGRAM_DM_MEDIA_PATH` | Directory for auto-downloaded inbound DM attachments |
 | `TELEGRAM_SOURCES_REFRESH_SEC` | Minimum delay between automatic inventory refreshes |
 | `TELEGRAM_SOURCES_DIALOG_LIMIT` | How many dialogs to scan when refreshing inventory |
 | `TELEGRAM_BRIDGE_API_TOKEN` | Optional bearer token for plugin/backend auth |
@@ -799,6 +808,7 @@ Use numeric Telegram user ids there when possible. They are more stable than use
 With `strictPeerBindings: true`, the plugin accepts inbound DMs only when `cfg.bindings` contains an exact peer binding for that sender.
 `markReadOnInbound: false` disables Telegram read receipts for accepted inbound DMs on this channel account. When enabled, read status is sent only for DMs that are allowed for interaction, not merely readable.
 `typingWhileReplying: false` disables Telegram typing status while OpenClaw is generating a DM reply on this channel account.
+Inbound DM media auto-download is enabled by default in backend (`TELEGRAM_DM_AUTO_DOWNLOAD_MEDIA=true`) and stores files under `TELEGRAM_DM_MEDIA_PATH`. Download happens only for DMs that pass this account's interaction allowlist at poll time.
 The channel also retries `/dm/inbox/ack` with a short request-level backoff, because ack is idempotent and safe to retry; the full inbound reply flow is not retried wholesale.
 Channel reload now watches both `channels.telegram-user-bridge` and `plugins.entries.telegram-user-bridge`, so channel account changes and plugin profile changes reload through the standard OpenClaw mechanism.
 When `/dm/inbox/poll` keeps failing, the DM channel also backs off progressively instead of retrying every `pollIntervalMs`.

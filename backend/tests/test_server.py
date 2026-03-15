@@ -1,6 +1,8 @@
 """Tests for source inventory integration in the HTTP layer."""
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from openclaw_tg_bridge.client import BridgeValidationError
@@ -8,18 +10,30 @@ from openclaw_tg_bridge.state import SourceInventoryStore
 
 try:
     from openclaw_tg_bridge.server import (
+        AckDmInboxBody,
         AllowedDmSender,
+        DmPeerBody,
+        HTTPException,
         _apply_source_discovery,
         _recover_dm_events,
+        _enrich_dm_events_with_downloaded_media,
         _source_entry_matches_policy,
+        mark_dm_read,
+        send_dm_typing,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "fastapi":
         raise
+    AckDmInboxBody = None
     AllowedDmSender = None
+    DmPeerBody = None
+    HTTPException = None
     _apply_source_discovery = None
     _recover_dm_events = None
+    _enrich_dm_events_with_downloaded_media = None
     _source_entry_matches_policy = None
+    mark_dm_read = None
+    send_dm_typing = None
 
 
 @unittest.skipIf(_apply_source_discovery is None, "fastapi is not installed in this test environment")
@@ -116,6 +130,223 @@ class TestServerSourceDiscovery(unittest.IsolatedAsyncioTestCase):
             limit=10,
             policy_overrides={},
         )
+
+    async def test_mark_dm_read_calls_bridge_with_matched_sender(self) -> None:
+        bridge = AsyncMock()
+        bridge.mark_read.return_value = {"ok": True}
+        policy = {"read_allow_chat_ids": ["1470044"], "write_allow_chat_ids": ["1470044"]}
+        allowed = [
+            AllowedDmSender(
+                peer_ref="1470044",
+                cursor_key="1470044",
+                match_keys=frozenset({"1470044", "alloweduser"}),
+            )
+        ]
+
+        with patch("openclaw_tg_bridge.server.get_bridge", return_value=bridge), patch(
+            "openclaw_tg_bridge.server.resolve_request_policy", new=AsyncMock(return_value=policy)
+        ), patch("openclaw_tg_bridge.server._resolve_allowed_dm_senders", new=AsyncMock(return_value=allowed)):
+            result = await mark_dm_read(
+                object(),
+                AckDmInboxBody(sender_id="1470044", sender_username="alloweduser", message_id=55),
+            )
+
+        self.assertEqual(result, {"ok": True})
+        bridge.mark_read.assert_awaited_once_with(
+            "1470044",
+            max_message_id=55,
+            policy_overrides=policy,
+        )
+
+    async def test_mark_dm_read_rejects_unmatched_sender(self) -> None:
+        bridge = AsyncMock()
+        policy = {"read_allow_chat_ids": ["1470044"], "write_allow_chat_ids": ["1470044"]}
+        allowed = [
+            AllowedDmSender(
+                peer_ref="1470044",
+                cursor_key="1470044",
+                match_keys=frozenset({"1470044", "alloweduser"}),
+            )
+        ]
+
+        with patch("openclaw_tg_bridge.server.get_bridge", return_value=bridge), patch(
+            "openclaw_tg_bridge.server.resolve_request_policy", new=AsyncMock(return_value=policy)
+        ), patch("openclaw_tg_bridge.server._resolve_allowed_dm_senders", new=AsyncMock(return_value=allowed)):
+            with self.assertRaises(HTTPException) as ctx:
+                await mark_dm_read(
+                    object(),
+                    AckDmInboxBody(sender_id="999999", sender_username="other", message_id=55),
+                )
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail, "Read receipt is not allowed for this sender.")
+        bridge.mark_read.assert_not_awaited()
+
+    async def test_send_dm_typing_matches_sender_by_username(self) -> None:
+        bridge = AsyncMock()
+        bridge.send_typing.return_value = {"ok": True}
+        policy = {"read_allow_chat_ids": ["@alloweduser"], "write_allow_chat_ids": ["1470044"]}
+        allowed = [
+            AllowedDmSender(
+                peer_ref="@alloweduser",
+                cursor_key="1470044",
+                match_keys=frozenset({"1470044", "alloweduser"}),
+            )
+        ]
+
+        with patch("openclaw_tg_bridge.server.get_bridge", return_value=bridge), patch(
+            "openclaw_tg_bridge.server.resolve_request_policy", new=AsyncMock(return_value=policy)
+        ), patch("openclaw_tg_bridge.server._resolve_allowed_dm_senders", new=AsyncMock(return_value=allowed)):
+            result = await send_dm_typing(
+                object(),
+                DmPeerBody(sender_id="0", sender_username="alloweduser"),
+            )
+
+        self.assertEqual(result, {"ok": True})
+        bridge.send_typing.assert_awaited_once_with(
+            "1470044",
+            policy_overrides=policy,
+        )
+
+    async def test_send_dm_typing_rejects_unmatched_sender(self) -> None:
+        bridge = AsyncMock()
+        policy = {"read_allow_chat_ids": ["@alloweduser"], "write_allow_chat_ids": ["1470044"]}
+        allowed = [
+            AllowedDmSender(
+                peer_ref="@alloweduser",
+                cursor_key="1470044",
+                match_keys=frozenset({"1470044", "alloweduser"}),
+            )
+        ]
+
+        with patch("openclaw_tg_bridge.server.get_bridge", return_value=bridge), patch(
+            "openclaw_tg_bridge.server.resolve_request_policy", new=AsyncMock(return_value=policy)
+        ), patch("openclaw_tg_bridge.server._resolve_allowed_dm_senders", new=AsyncMock(return_value=allowed)):
+            with self.assertRaises(HTTPException) as ctx:
+                await send_dm_typing(
+                    object(),
+                    DmPeerBody(sender_id="0", sender_username="otheruser"),
+                )
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail, "Typing status is not allowed for this sender.")
+        bridge.send_typing.assert_not_awaited()
+
+    async def test_dm_media_enrichment_downloads_and_sets_media_paths(self) -> None:
+        bridge = AsyncMock()
+        bridge.download_media_for_inbox = AsyncMock(return_value="/tmp/dm_media/1470044/26_photo.jpg")
+        events = [
+            {
+                "id": 26,
+                "sender_id": "1470044",
+                "sender_username": "alloweduser",
+                "has_media": True,
+                "media_type": "MessageMediaPhoto",
+                "file_name": "photo.jpg",
+                "mime_type": "image/jpeg",
+            }
+        ]
+        allowed = [
+            AllowedDmSender(
+                peer_ref="@alloweduser",
+                cursor_key="1470044",
+                match_keys=frozenset({"1470044", "alloweduser"}),
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            media_path = Path(temp_dir) / "1470044" / "26_photo.jpg"
+            media_path.parent.mkdir(parents=True, exist_ok=True)
+            media_path.write_bytes(b"img")
+            bridge.download_media_for_inbox.return_value = str(media_path)
+            with patch(
+                "openclaw_tg_bridge.server.get_config",
+                return_value={"dm_auto_download_media": True, "dm_media_path": temp_dir},
+            ):
+                enriched = await _enrich_dm_events_with_downloaded_media(
+                    bridge=bridge,
+                    policy={},
+                    allowed_senders=allowed,
+                    events=events,
+                )
+
+        self.assertEqual(enriched[0]["media_path"], str(media_path.resolve()))
+        self.assertEqual(enriched[0]["media_paths"], [str(media_path.resolve())])
+        bridge.download_media_for_inbox.assert_awaited_once_with(
+            "@alloweduser",
+            26,
+            output_path=str(media_path),
+            policy_overrides={},
+        )
+
+    async def test_dm_media_enrichment_skips_non_downloadable_media_type(self) -> None:
+        bridge = AsyncMock()
+        bridge.download_media_for_inbox = AsyncMock()
+        events = [
+            {
+                "id": 28,
+                "sender_id": "1470044",
+                "sender_username": "alloweduser",
+                "has_media": True,
+                "media_type": "MessageMediaContact",
+                "contact_phone": "+12025550123",
+            }
+        ]
+        allowed = [
+            AllowedDmSender(
+                peer_ref="@alloweduser",
+                cursor_key="1470044",
+                match_keys=frozenset({"1470044", "alloweduser"}),
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "openclaw_tg_bridge.server.get_config",
+            return_value={"dm_auto_download_media": True, "dm_media_path": temp_dir},
+        ):
+            enriched = await _enrich_dm_events_with_downloaded_media(
+                bridge=bridge,
+                policy={},
+                allowed_senders=allowed,
+                events=events,
+            )
+
+        self.assertNotIn("media_path", enriched[0])
+        bridge.download_media_for_inbox.assert_not_awaited()
+
+    async def test_dm_media_enrichment_respects_disabled_config(self) -> None:
+        bridge = AsyncMock()
+        bridge.download_media_for_inbox = AsyncMock()
+        events = [
+            {
+                "id": 29,
+                "sender_id": "1470044",
+                "sender_username": "alloweduser",
+                "has_media": True,
+                "media_type": "MessageMediaPhoto",
+            }
+        ]
+        allowed = [
+            AllowedDmSender(
+                peer_ref="@alloweduser",
+                cursor_key="1470044",
+                match_keys=frozenset({"1470044", "alloweduser"}),
+            )
+        ]
+
+        with patch(
+            "openclaw_tg_bridge.server.get_config",
+            return_value={"dm_auto_download_media": False, "dm_media_path": "/tmp/unused"},
+        ):
+            enriched = await _enrich_dm_events_with_downloaded_media(
+                bridge=bridge,
+                policy={},
+                allowed_senders=allowed,
+                events=events,
+            )
+
+        self.assertEqual(enriched[0]["id"], 29)
+        bridge.download_media_for_inbox.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -268,6 +268,17 @@ def _extract_geo_summary(message: Any) -> dict[str, Any]:
     return result
 
 
+def _extract_contact_summary(message: Any) -> dict[str, Any]:
+    media = getattr(message, "media", None)
+    return {
+        "contact_phone": getattr(media, "phone_number", None),
+        "contact_first_name": getattr(media, "first_name", None),
+        "contact_last_name": getattr(media, "last_name", None),
+        "contact_user_id": _extract_peer_id(getattr(media, "user_id", None)),
+        "contact_vcard": getattr(media, "vcard", None),
+    }
+
+
 def _resolve_chat_type(entity: Any | None) -> str:
     if entity is None:
         return "unknown"
@@ -354,6 +365,7 @@ def _serialize_message(
     }
     payload.update(_extract_media_summary(message))
     payload.update(_extract_geo_summary(message))
+    payload.update(_extract_contact_summary(message))
     entities = _serialize_message_entities(message)
     if entities:
         payload["entities"] = entities
@@ -1142,6 +1154,41 @@ class BridgeClient:
             "path": file_path,
             "message": _serialize_message(tg_message, entity=entity),
         }
+
+    async def download_media_for_inbox(
+        self,
+        peer: str | int,
+        message_id: int,
+        *,
+        output_path: str,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> str | None:
+        """Download one inbound DM attachment for internal channel processing.
+
+        Unlike download_media(), this path is used by /dm/inbox/poll and only enforces read scope.
+        """
+        policy = self._resolve_policy(policy_overrides)
+        if message_id < 1:
+            raise BridgeValidationError("message_id must be >= 1.")
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        tg_message = await self._call_telegram(
+            self._client.get_messages,
+            entity,
+            ids=message_id,
+            action="download inbound media",
+        )
+        if tg_message is None or getattr(tg_message, "media", None) is None:
+            return None
+        return await self._call_telegram(
+            self._client.download_media,
+            tg_message,
+            file=output_path,
+            action="download inbound media",
+        )
 
     async def search_messages(
         self,

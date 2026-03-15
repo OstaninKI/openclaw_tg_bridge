@@ -916,6 +916,844 @@ test("DM gateway can mark read and send typing while generating replies", async 
   });
 });
 
+test("DM gateway keeps reply and ack flow when read receipt call fails", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            strictPeerBindings: true,
+            allowFrom: ["123456789"],
+            writeTo: ["123456789"],
+            markReadOnInbound: true,
+            typingWhileReplying: false,
+          },
+        },
+      },
+    },
+    bindings: [
+      {
+        agentId: "owner-agent",
+        match: {
+          channel: "telegram-user-bridge",
+          accountId: "default",
+          peer: { kind: "direct", id: "123456789" },
+        },
+      },
+    ],
+  });
+  register(api);
+
+  const account = api.channels[0].config.resolveAccount(api.config, "default");
+  const abortController = new AbortController();
+  const seen = [];
+  let acked = null;
+  const ackedPromise = new Promise((resolve) => {
+    acked = resolve;
+  });
+  const event = {
+    id: 44,
+    text: "hello from telegram",
+    sender_id: "123456789",
+    sender_name: "Alice",
+    sender_username: "alice",
+    date: "2026-03-14T10:00:00+00:00",
+  };
+  let pollCount = 0;
+
+  globalThis.fetch = async (url, init = {}) => {
+    const normalizedUrl = String(url);
+    seen.push({ url: normalizedUrl, init });
+    if (normalizedUrl.includes("/dm/inbox/poll")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({ events: pollCount === 1 ? [event] : [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/read")) {
+      return new Response(JSON.stringify({ detail: "Read receipt is not allowed for this sender." }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/send_message")) {
+      return new Response(JSON.stringify({ ok: true, message_id: 1002 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/inbox/ack")) {
+      abortController.abort();
+      acked();
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${normalizedUrl}`);
+  };
+
+  const channelRuntime = {
+    reply: {
+      resolveEnvelopeFormatOptions() {
+        return {};
+      },
+      formatAgentEnvelope({ body }) {
+        return body;
+      },
+      finalizeInboundContext(ctx) {
+        return ctx;
+      },
+      async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions }) {
+        await dispatcherOptions.deliver({ text: "reply from agent" });
+      },
+    },
+    routing: {
+      buildAgentSessionKey() {
+        return "dm-session-key";
+      },
+    },
+    session: {
+      resolveStorePath() {
+        return "/tmp/test";
+      },
+      readSessionUpdatedAt() {
+        return 0;
+      },
+      async recordInboundSession() {},
+    },
+  };
+
+  const handle = await api.channels[0].gateway.startAccount({
+    account,
+    cfg: api.config,
+    channelRuntime,
+    abortSignal: abortController.signal,
+    getStatus() {
+      return null;
+    },
+    setStatus() {},
+  });
+
+  try {
+    await Promise.race([
+      ackedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timed out waiting for DM ack")), 500)),
+    ]);
+  } finally {
+    await handle.stop();
+  }
+
+  const requestUrls = seen.map((item) => item.url);
+  assert.ok(requestUrls.some((url) => url.includes("/dm/read")));
+  assert.ok(requestUrls.some((url) => url.includes("/send_message")));
+  assert.ok(requestUrls.some((url) => url.includes("/dm/inbox/ack")));
+});
+
+test("DM gateway skips malformed poll events and processes valid ones", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            strictPeerBindings: true,
+            allowFrom: ["123456789"],
+            writeTo: ["123456789"],
+            markReadOnInbound: false,
+            typingWhileReplying: false,
+          },
+        },
+      },
+    },
+    bindings: [
+      {
+        agentId: "owner-agent",
+        match: {
+          channel: "telegram-user-bridge",
+          accountId: "default",
+          peer: { kind: "direct", id: "123456789" },
+        },
+      },
+    ],
+  });
+  register(api);
+
+  const account = api.channels[0].config.resolveAccount(api.config, "default");
+  const abortController = new AbortController();
+  const acks = [];
+  let sentCount = 0;
+  let acked = null;
+  const ackedPromise = new Promise((resolve) => {
+    acked = resolve;
+  });
+  const validEvent = {
+    id: 45,
+    text: "hello from telegram",
+    sender_id: "123456789",
+    sender_name: "Alice",
+    sender_username: "alice",
+    date: "2026-03-14T10:00:00+00:00",
+  };
+  const malformedEvent = {
+    id: 999,
+    text: "bad event",
+    sender_name: "Malformed",
+  };
+  let pollCount = 0;
+
+  globalThis.fetch = async (url, init = {}) => {
+    const normalizedUrl = String(url);
+    if (normalizedUrl.includes("/dm/inbox/poll")) {
+      pollCount += 1;
+      return new Response(
+        JSON.stringify({ events: pollCount === 1 ? [malformedEvent, validEvent] : [] }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }
+      );
+    }
+    if (normalizedUrl.includes("/send_message")) {
+      sentCount += 1;
+      return new Response(JSON.stringify({ ok: true, message_id: 1003 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/inbox/ack")) {
+      const payload = JSON.parse(init.body);
+      acks.push(payload);
+      if (payload.message_id === 45) {
+        abortController.abort();
+        acked();
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${normalizedUrl}`);
+  };
+
+  const channelRuntime = {
+    reply: {
+      resolveEnvelopeFormatOptions() {
+        return {};
+      },
+      formatAgentEnvelope({ body }) {
+        return body;
+      },
+      finalizeInboundContext(ctx) {
+        return ctx;
+      },
+      async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions }) {
+        await dispatcherOptions.deliver({ text: "reply from agent" });
+      },
+    },
+    routing: {
+      buildAgentSessionKey() {
+        return "dm-session-key";
+      },
+    },
+    session: {
+      resolveStorePath() {
+        return "/tmp/test";
+      },
+      readSessionUpdatedAt() {
+        return 0;
+      },
+      async recordInboundSession() {},
+    },
+  };
+
+  const handle = await api.channels[0].gateway.startAccount({
+    account,
+    cfg: api.config,
+    channelRuntime,
+    abortSignal: abortController.signal,
+    getStatus() {
+      return null;
+    },
+    setStatus() {},
+  });
+
+  try {
+    await Promise.race([
+      ackedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timed out waiting for DM ack")), 500)),
+    ]);
+  } finally {
+    await handle.stop();
+  }
+
+  assert.equal(sentCount, 1);
+  assert.deepEqual(acks, [
+    {
+      sender_id: "123456789",
+      sender_username: "alice",
+      message_id: 45,
+    },
+  ]);
+});
+
+test("DM gateway includes media metadata in inbound body for agent context", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            strictPeerBindings: true,
+            allowFrom: ["123456789"],
+            writeTo: ["123456789"],
+            markReadOnInbound: false,
+            typingWhileReplying: false,
+          },
+        },
+      },
+    },
+    bindings: [
+      {
+        agentId: "owner-agent",
+        match: {
+          channel: "telegram-user-bridge",
+          accountId: "default",
+          peer: { kind: "direct", id: "123456789" },
+        },
+      },
+    ],
+  });
+  register(api);
+
+  const account = api.channels[0].config.resolveAccount(api.config, "default");
+  const abortController = new AbortController();
+  let acked = null;
+  const ackedPromise = new Promise((resolve) => {
+    acked = resolve;
+  });
+  const event = {
+    id: 46,
+    text: "caption text",
+    sender_id: "123456789",
+    sender_name: "Alice",
+    sender_username: "alice",
+    date: "2026-03-14T10:00:00+00:00",
+    has_media: true,
+    media_type: "MessageMediaPhoto",
+    mime_type: "image/jpeg",
+    file_size: 12345,
+    media_path: "/tmp/openclaw/dm_media/123456789/46_photo.jpg",
+    media_paths: ["/tmp/openclaw/dm_media/123456789/46_photo.jpg"],
+  };
+  let pollCount = 0;
+  let capturedCtx = null;
+
+  globalThis.fetch = async (url, init = {}) => {
+    const normalizedUrl = String(url);
+    if (normalizedUrl.includes("/dm/inbox/poll")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({ events: pollCount === 1 ? [event] : [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/send_message")) {
+      return new Response(JSON.stringify({ ok: true, message_id: 1004 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/inbox/ack")) {
+      abortController.abort();
+      acked();
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${normalizedUrl}`);
+  };
+
+  const channelRuntime = {
+    reply: {
+      resolveEnvelopeFormatOptions() {
+        return {};
+      },
+      formatAgentEnvelope({ body }) {
+        return body;
+      },
+      finalizeInboundContext(ctx) {
+        return ctx;
+      },
+      async dispatchReplyWithBufferedBlockDispatcher({ ctx, dispatcherOptions }) {
+        capturedCtx = ctx;
+        await dispatcherOptions.deliver({ text: "reply from agent" });
+      },
+    },
+    routing: {
+      buildAgentSessionKey() {
+        return "dm-session-key";
+      },
+    },
+    session: {
+      resolveStorePath() {
+        return "/tmp/test";
+      },
+      readSessionUpdatedAt() {
+        return 0;
+      },
+      async recordInboundSession() {},
+    },
+  };
+
+  const handle = await api.channels[0].gateway.startAccount({
+    account,
+    cfg: api.config,
+    channelRuntime,
+    abortSignal: abortController.signal,
+    getStatus() {
+      return null;
+    },
+    setStatus() {},
+  });
+
+  try {
+    await Promise.race([
+      ackedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timed out waiting for DM ack")), 500)),
+    ]);
+  } finally {
+    await handle.stop();
+  }
+
+  assert.ok(capturedCtx);
+  assert.match(capturedCtx.BodyForAgent, /caption text/);
+  assert.match(capturedCtx.BodyForAgent, /\[Telegram media attached/);
+  assert.match(capturedCtx.BodyForAgent, /\[Telegram media files \| paths:\/tmp\/openclaw\/dm_media\/123456789\/46_photo.jpg\]/);
+  assert.match(capturedCtx.BodyForAgent, /type:MessageMediaPhoto/);
+  assert.equal(capturedCtx.HasMedia, true);
+  assert.equal(capturedCtx.MediaType, "MessageMediaPhoto");
+  assert.deepEqual(capturedCtx.MediaTypes, ["MessageMediaPhoto"]);
+  assert.equal(capturedCtx.MediaMimeType, "image/jpeg");
+  assert.equal(capturedCtx.MediaFileSize, 12345);
+  assert.equal(capturedCtx.MediaPath, "/tmp/openclaw/dm_media/123456789/46_photo.jpg");
+  assert.deepEqual(capturedCtx.MediaPaths, ["/tmp/openclaw/dm_media/123456789/46_photo.jpg"]);
+});
+
+test("DM gateway keeps media hint for photo-only inbound message without text", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            strictPeerBindings: true,
+            allowFrom: ["123456789"],
+            writeTo: ["123456789"],
+            markReadOnInbound: false,
+            typingWhileReplying: false,
+          },
+        },
+      },
+    },
+    bindings: [
+      {
+        agentId: "owner-agent",
+        match: {
+          channel: "telegram-user-bridge",
+          accountId: "default",
+          peer: { kind: "direct", id: "123456789" },
+        },
+      },
+    ],
+  });
+  register(api);
+
+  const account = api.channels[0].config.resolveAccount(api.config, "default");
+  const abortController = new AbortController();
+  let acked = null;
+  const ackedPromise = new Promise((resolve) => {
+    acked = resolve;
+  });
+  const event = {
+    id: 47,
+    text: "",
+    sender_id: "123456789",
+    sender_name: "Alice",
+    sender_username: "alice",
+    date: "2026-03-14T10:00:00+00:00",
+    has_media: true,
+    media_type: "MessageMediaPhoto",
+  };
+  let pollCount = 0;
+  let capturedCtx = null;
+
+  globalThis.fetch = async (url) => {
+    const normalizedUrl = String(url);
+    if (normalizedUrl.includes("/dm/inbox/poll")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({ events: pollCount === 1 ? [event] : [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/send_message")) {
+      return new Response(JSON.stringify({ ok: true, message_id: 1005 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/inbox/ack")) {
+      abortController.abort();
+      acked();
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${normalizedUrl}`);
+  };
+
+  const channelRuntime = {
+    reply: {
+      resolveEnvelopeFormatOptions() {
+        return {};
+      },
+      formatAgentEnvelope({ body }) {
+        return body;
+      },
+      finalizeInboundContext(ctx) {
+        return ctx;
+      },
+      async dispatchReplyWithBufferedBlockDispatcher({ ctx, dispatcherOptions }) {
+        capturedCtx = ctx;
+        await dispatcherOptions.deliver({ text: "reply from agent" });
+      },
+    },
+    routing: {
+      buildAgentSessionKey() {
+        return "dm-session-key";
+      },
+    },
+    session: {
+      resolveStorePath() {
+        return "/tmp/test";
+      },
+      readSessionUpdatedAt() {
+        return 0;
+      },
+      async recordInboundSession() {},
+    },
+  };
+
+  const handle = await api.channels[0].gateway.startAccount({
+    account,
+    cfg: api.config,
+    channelRuntime,
+    abortSignal: abortController.signal,
+    getStatus() {
+      return null;
+    },
+    setStatus() {},
+  });
+
+  try {
+    await Promise.race([
+      ackedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timed out waiting for DM ack")), 500)),
+    ]);
+  } finally {
+    await handle.stop();
+  }
+
+  assert.ok(capturedCtx);
+  assert.match(capturedCtx.BodyForAgent, /\[Non-text Telegram message\]/);
+  assert.match(capturedCtx.BodyForAgent, /\[Telegram media attached/);
+});
+
+test("DM gateway includes geo and entity metadata in inbound agent context", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            strictPeerBindings: true,
+            allowFrom: ["123456789"],
+            writeTo: ["123456789"],
+            markReadOnInbound: false,
+            typingWhileReplying: false,
+          },
+        },
+      },
+    },
+    bindings: [
+      {
+        agentId: "owner-agent",
+        match: {
+          channel: "telegram-user-bridge",
+          accountId: "default",
+          peer: { kind: "direct", id: "123456789" },
+        },
+      },
+    ],
+  });
+  register(api);
+
+  const account = api.channels[0].config.resolveAccount(api.config, "default");
+  const abortController = new AbortController();
+  let acked = null;
+  const ackedPromise = new Promise((resolve) => {
+    acked = resolve;
+  });
+  const event = {
+    id: 48,
+    text: "😀 точка на карте",
+    sender_id: "123456789",
+    sender_name: "Alice",
+    sender_username: "alice",
+    date: "2026-03-14T10:00:00+00:00",
+    latitude: 40.7128,
+    longitude: -74.006,
+    venue_title: "Place",
+    entities: [{ type: "MessageEntityCustomEmoji" }, { type: "MessageEntityUrl" }],
+  };
+  let pollCount = 0;
+  let capturedCtx = null;
+
+  globalThis.fetch = async (url) => {
+    const normalizedUrl = String(url);
+    if (normalizedUrl.includes("/dm/inbox/poll")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({ events: pollCount === 1 ? [event] : [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/send_message")) {
+      return new Response(JSON.stringify({ ok: true, message_id: 1006 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/inbox/ack")) {
+      abortController.abort();
+      acked();
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${normalizedUrl}`);
+  };
+
+  const channelRuntime = {
+    reply: {
+      resolveEnvelopeFormatOptions() {
+        return {};
+      },
+      formatAgentEnvelope({ body }) {
+        return body;
+      },
+      finalizeInboundContext(ctx) {
+        return ctx;
+      },
+      async dispatchReplyWithBufferedBlockDispatcher({ ctx, dispatcherOptions }) {
+        capturedCtx = ctx;
+        await dispatcherOptions.deliver({ text: "reply from agent" });
+      },
+    },
+    routing: {
+      buildAgentSessionKey() {
+        return "dm-session-key";
+      },
+    },
+    session: {
+      resolveStorePath() {
+        return "/tmp/test";
+      },
+      readSessionUpdatedAt() {
+        return 0;
+      },
+      async recordInboundSession() {},
+    },
+  };
+
+  const handle = await api.channels[0].gateway.startAccount({
+    account,
+    cfg: api.config,
+    channelRuntime,
+    abortSignal: abortController.signal,
+    getStatus() {
+      return null;
+    },
+    setStatus() {},
+  });
+
+  try {
+    await Promise.race([
+      ackedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timed out waiting for DM ack")), 500)),
+    ]);
+  } finally {
+    await handle.stop();
+  }
+
+  assert.ok(capturedCtx);
+  assert.match(capturedCtx.BodyForAgent, /😀 точка на карте/);
+  assert.match(capturedCtx.BodyForAgent, /\[Telegram location \| geo:40.7128,-74.006 \| venue:Place\]/);
+  assert.match(capturedCtx.BodyForAgent, /\[Telegram entities \| MessageEntityCustomEmoji,MessageEntityUrl\]/);
+  assert.equal(capturedCtx.Latitude, 40.7128);
+  assert.equal(capturedCtx.Longitude, -74.006);
+  assert.equal(capturedCtx.VenueTitle, "Place");
+  assert.deepEqual(capturedCtx.MessageEntities, [{ type: "MessageEntityCustomEmoji" }, { type: "MessageEntityUrl" }]);
+});
+
+test("DM gateway includes contact metadata in inbound agent context", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            strictPeerBindings: true,
+            allowFrom: ["123456789"],
+            writeTo: ["123456789"],
+            markReadOnInbound: false,
+            typingWhileReplying: false,
+          },
+        },
+      },
+    },
+    bindings: [
+      {
+        agentId: "owner-agent",
+        match: {
+          channel: "telegram-user-bridge",
+          accountId: "default",
+          peer: { kind: "direct", id: "123456789" },
+        },
+      },
+    ],
+  });
+  register(api);
+
+  const account = api.channels[0].config.resolveAccount(api.config, "default");
+  const abortController = new AbortController();
+  let acked = null;
+  const ackedPromise = new Promise((resolve) => {
+    acked = resolve;
+  });
+  const event = {
+    id: 49,
+    text: "",
+    sender_id: "123456789",
+    sender_name: "Alice",
+    sender_username: "alice",
+    date: "2026-03-14T10:00:00+00:00",
+    has_media: true,
+    media_type: "MessageMediaContact",
+    contact_phone: "+12025550123",
+    contact_first_name: "Bob",
+    contact_last_name: "Contact",
+    contact_user_id: 9001,
+    contact_vcard: "BEGIN:VCARD",
+  };
+  let pollCount = 0;
+  let capturedCtx = null;
+
+  globalThis.fetch = async (url) => {
+    const normalizedUrl = String(url);
+    if (normalizedUrl.includes("/dm/inbox/poll")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({ events: pollCount === 1 ? [event] : [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/send_message")) {
+      return new Response(JSON.stringify({ ok: true, message_id: 1007 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/inbox/ack")) {
+      abortController.abort();
+      acked();
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${normalizedUrl}`);
+  };
+
+  const channelRuntime = {
+    reply: {
+      resolveEnvelopeFormatOptions() {
+        return {};
+      },
+      formatAgentEnvelope({ body }) {
+        return body;
+      },
+      finalizeInboundContext(ctx) {
+        return ctx;
+      },
+      async dispatchReplyWithBufferedBlockDispatcher({ ctx, dispatcherOptions }) {
+        capturedCtx = ctx;
+        await dispatcherOptions.deliver({ text: "reply from agent" });
+      },
+    },
+    routing: {
+      buildAgentSessionKey() {
+        return "dm-session-key";
+      },
+    },
+    session: {
+      resolveStorePath() {
+        return "/tmp/test";
+      },
+      readSessionUpdatedAt() {
+        return 0;
+      },
+      async recordInboundSession() {},
+    },
+  };
+
+  const handle = await api.channels[0].gateway.startAccount({
+    account,
+    cfg: api.config,
+    channelRuntime,
+    abortSignal: abortController.signal,
+    getStatus() {
+      return null;
+    },
+    setStatus() {},
+  });
+
+  try {
+    await Promise.race([
+      ackedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timed out waiting for DM ack")), 500)),
+    ]);
+  } finally {
+    await handle.stop();
+  }
+
+  assert.ok(capturedCtx);
+  assert.match(capturedCtx.BodyForAgent, /\[Telegram contact/);
+  assert.match(capturedCtx.BodyForAgent, /phone:\+12025550123/);
+  assert.match(capturedCtx.BodyForAgent, /name:Bob Contact/);
+  assert.equal(capturedCtx.ContactPhone, "+12025550123");
+  assert.equal(capturedCtx.ContactFirstName, "Bob");
+  assert.equal(capturedCtx.ContactLastName, "Contact");
+  assert.equal(capturedCtx.ContactUserId, "9001");
+  assert.equal(capturedCtx.ContactVCard, "BEGIN:VCARD");
+});
+
 test("strict DM binding resolves exact sender to agent", () => {
   const route = __test.resolveConfiguredDmBinding(
     {

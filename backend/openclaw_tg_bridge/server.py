@@ -3,10 +3,12 @@
 import asyncio
 import hmac
 import logging
+import mimetypes
 import time
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -41,6 +43,19 @@ _dm_cursor_store: DmCursorStore | None = None
 _dm_broker: "DmInboxBroker | None" = None
 _resolved_peer_cache: "ResolvedPeerCache | None" = None
 _process_lock: ProcessLock | None = None
+NON_DOWNLOADABLE_DM_MEDIA_TYPES = frozenset(
+    {
+        "MessageMediaContact",
+        "MessageMediaGeo",
+        "MessageMediaGeoLive",
+        "MessageMediaVenue",
+        "MessageMediaDice",
+        "MessageMediaPoll",
+        "MessageMediaGame",
+        "MessageMediaUnsupported",
+        "MessageMediaEmpty",
+    }
+)
 
 
 def get_bridge() -> BridgeClient:
@@ -632,6 +647,146 @@ async def _recover_dm_events(
                 return recovered
     recovered.sort(key=lambda item: (int(item.get("date_unix", 0)), int(item.get("id", 0))))
     return recovered
+
+
+def _dm_event_has_downloadable_media(event: dict[str, Any]) -> bool:
+    has_media = bool(event.get("has_media") is True or event.get("media_type") or event.get("file_name"))
+    if not has_media:
+        return False
+    media_type = str(event.get("media_type") or "").strip()
+    if media_type and media_type in NON_DOWNLOADABLE_DM_MEDIA_TYPES:
+        return False
+    return True
+
+
+def _sanitize_file_component(value: str | None, fallback: str) -> str:
+    raw = (value or "").strip()
+    if raw:
+        raw = Path(raw).name
+    if not raw:
+        raw = fallback
+    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in raw).strip("._")
+    return cleaned or fallback
+
+
+def _guess_dm_media_extension(file_name: str | None, mime_type: str | None) -> str:
+    suffix = Path(file_name).suffix if file_name else ""
+    if suffix:
+        return suffix
+    if mime_type:
+        guessed = mimetypes.guess_extension(mime_type, strict=False)
+        if guessed:
+            return guessed
+    return ".bin"
+
+
+def _resolve_dm_media_output_path(event: dict[str, Any], media_root: Path) -> Path:
+    sender_key = _normalize_peer(event.get("sender_id")) or "unknown"
+    try:
+        message_id = int(event.get("id") or 0)
+    except (TypeError, ValueError):
+        message_id = 0
+    ext = _guess_dm_media_extension(
+        event.get("file_name") if isinstance(event.get("file_name"), str) else None,
+        event.get("mime_type") if isinstance(event.get("mime_type"), str) else None,
+    )
+    default_name = f"media{ext}"
+    base_name = _sanitize_file_component(event.get("file_name") if isinstance(event.get("file_name"), str) else None, default_name)
+    if not Path(base_name).suffix:
+        base_name = f"{base_name}{ext}"
+    safe_sender = _sanitize_file_component(sender_key, "unknown")
+    safe_message_id = str(max(1, message_id))
+    return media_root / safe_sender / f"{safe_message_id}_{base_name}"
+
+
+def _normalize_dm_media_paths(payload: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    media_path = payload.get("media_path")
+    if isinstance(media_path, str) and media_path.strip():
+        paths.append(media_path.strip())
+    media_paths = payload.get("media_paths")
+    if isinstance(media_paths, list):
+        for item in media_paths:
+            if isinstance(item, str) and item.strip():
+                paths.append(item.strip())
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in paths:
+        if item in seen:
+            continue
+        deduped.append(item)
+        seen.add(item)
+    return deduped
+
+
+def _store_dm_media_paths(payload: dict[str, Any], path: Path) -> None:
+    normalized_path = str(path)
+    combined = _normalize_dm_media_paths(payload)
+    if normalized_path not in combined:
+        combined.append(normalized_path)
+    payload["media_path"] = normalized_path
+    payload["media_paths"] = combined
+
+
+async def _enrich_dm_events_with_downloaded_media(
+    *,
+    bridge: BridgeClient,
+    policy: dict,
+    allowed_senders: list[AllowedDmSender],
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    cfg = get_config()
+    if not bool(cfg.get("dm_auto_download_media", True)):
+        return events
+
+    media_root = Path(str(cfg.get("dm_media_path") or "")).expanduser().resolve()
+    media_root.mkdir(parents=True, exist_ok=True)
+
+    for event in events:
+        if not _dm_event_has_downloadable_media(event):
+            continue
+        sender = _match_allowed_dm_sender(
+            allowed_senders,
+            event.get("sender_id"),
+            event.get("sender_username") if isinstance(event.get("sender_username"), str) else None,
+        )
+        if sender is None:
+            continue
+        try:
+            message_id = int(event.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if message_id < 1:
+            continue
+        output_path = _resolve_dm_media_output_path(event, media_root)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.exists():
+            _store_dm_media_paths(event, output_path)
+            continue
+        try:
+            downloaded = await bridge.download_media_for_inbox(
+                sender.peer_ref,
+                message_id,
+                output_path=str(output_path),
+                policy_overrides=policy,
+            )
+        except BridgeError as exc:
+            logger.warning("DM media auto-download skipped for %s/%s: %s", sender.cursor_key, message_id, exc.detail)
+            continue
+        except Exception:
+            logger.exception("DM media auto-download failed for %s/%s", sender.cursor_key, message_id)
+            continue
+
+        if isinstance(downloaded, str) and downloaded.strip():
+            resolved = Path(downloaded).expanduser()
+            if not resolved.is_absolute():
+                resolved = output_path
+            _store_dm_media_paths(event, resolved.resolve())
+            continue
+        if output_path.exists():
+            _store_dm_media_paths(event, output_path.resolve())
+
+    return events
 
 
 @app.post("/send_message")
@@ -1504,6 +1659,13 @@ async def poll_dm_inbox(request: Request, timeout_ms: int = 25000, limit: int = 
                 allowed_senders=allowed_senders,
                 cursor_map=cursor_map,
                 limit=min(max(1, limit), 50),
+            )
+        if events:
+            events = await _enrich_dm_events_with_downloaded_media(
+                bridge=bridge,
+                policy=policy,
+                allowed_senders=allowed_senders,
+                events=events,
             )
 
         return {"events": events, "consumer_id": consumer_id}

@@ -34,6 +34,18 @@ def _get_float(key: str, default: float | None = None) -> float | None:
         return default
 
 
+def _get_bool(key: str, default: bool) -> bool:
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _list_from_env(key: str) -> list[str]:
     raw = os.environ.get(key, "").strip()
     if not raw:
@@ -97,6 +109,8 @@ def load_config() -> dict[str, Any]:
     )
     sources_inventory_path = os.environ.get("TELEGRAM_SOURCES_INVENTORY_PATH", "").strip()
     inbox_state_path = os.environ.get("TELEGRAM_INBOX_STATE_PATH", "").strip()
+    dm_media_path = os.environ.get("TELEGRAM_DM_MEDIA_PATH", "").strip()
+    dm_auto_download_media = _get_bool("TELEGRAM_DM_AUTO_DOWNLOAD_MEDIA", True)
     lock_path = os.environ.get("TELEGRAM_LOCK_PATH", "").strip()
     sources_refresh_sec = _get_float("TELEGRAM_SOURCES_REFRESH_SEC") or 300.0
     sources_dialog_limit = _get_int("TELEGRAM_SOURCES_DIALOG_LIMIT") or 500
@@ -135,6 +149,8 @@ def load_config() -> dict[str, Any]:
         "policy_default_profile": policy_default_profile or None,
         "sources_inventory_path": sources_inventory_path or str(default_state_dir / "sources_inventory.json"),
         "inbox_state_path": inbox_state_path or str(default_state_dir / "dm_inbox_state.json"),
+        "dm_media_path": dm_media_path or str(default_state_dir / "dm_inbox_media"),
+        "dm_auto_download_media": dm_auto_download_media,
         "lock_path": lock_path or str(default_state_dir / "bridge.lock"),
         "sources_refresh_sec": max(0.0, sources_refresh_sec),
         "sources_dialog_limit": min(max(50, sources_dialog_limit), 2000),
