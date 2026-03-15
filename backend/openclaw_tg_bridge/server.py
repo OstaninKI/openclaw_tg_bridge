@@ -13,7 +13,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from openclaw_tg_bridge.client import BridgeClient, BridgeError, _normalize_peer, _serialize_message
+from openclaw_tg_bridge.client import (
+    BridgeClient,
+    BridgeError,
+    BridgeValidationError,
+    _normalize_peer,
+    _serialize_message,
+)
 from openclaw_tg_bridge.config import (
     PolicyStore,
     load_config,
@@ -281,6 +287,13 @@ async def lifespan(app: FastAPI):
             payload["chat_type"] = "direct"
             if payload.get("chat_title") is None:
                 payload["chat_title"] = payload.get("sender_name")
+            observed_entity = sender or getattr(event, "chat", None)
+            if observed_entity is not None:
+                _bridge.observe_peer_entity(
+                    observed_entity,
+                    peer=payload.get("sender_id"),
+                    extra_keys=[payload.get("sender_username")],
+                )
             await get_dm_broker().push(payload)
 
         _bridge.client.add_event_handler(_on_new_dm, events.NewMessage(incoming=True))
@@ -570,12 +583,18 @@ async def _recover_dm_events(
     seen: set[tuple[str, int]] = set()
     for sender in allowed_senders:
         min_id = cursor_map.get(sender.cursor_key, 0)
-        messages = await bridge.get_incoming_direct_messages(
-            sender.peer_ref,
-            min_id=min_id,
-            limit=limit,
-            policy_overrides=policy,
-        )
+        try:
+            messages = await bridge.get_incoming_direct_messages(
+                sender.peer_ref,
+                min_id=min_id,
+                limit=limit,
+                policy_overrides=policy,
+            )
+        except BridgeValidationError as exc:
+            if exc.detail.startswith("Invalid Telegram peer for read incoming direct messages."):
+                logger.info("Skipping DM recovery for unresolved sender peer %s", sender.peer_ref)
+                continue
+            raise
         for message in messages:
             sender_id = _normalize_peer(message.get("sender_id") or sender.cursor_key)
             message_id = int(message.get("id") or 0)

@@ -108,6 +108,20 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.mock_tg.send_message.assert_awaited_once_with(entity, "hello", reply_to=None)
         sleep_mock.assert_awaited()
 
+    async def test_send_message_uses_observed_entity_for_numeric_peer(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["1470044"])
+        observed = SimpleNamespace(id=1470044, username="alloweduser", access_hash=12345)
+        bridge.observe_peer_entity(observed, peer="1470044")
+        self.mock_tg.send_message.return_value = SimpleNamespace(id=101)
+
+        with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            result = await bridge.send_message("1470044", "hello")
+
+        self.assertEqual(result["message_id"], 101)
+        self.mock_tg.get_entity.assert_not_awaited()
+        self.mock_tg.send_message.assert_awaited_once_with(observed, "hello", reply_to=None)
+        sleep_mock.assert_awaited()
+
     async def test_send_message_blocks_when_resolved_entity_matches_write_denylist(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["42"], write_deny_chat_ids=["42"])
         entity = SimpleNamespace(id=42, username="AllowedUser")

@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import logging
 import random
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ else:
     TelegramClient = Any
 
 MAX_MESSAGE_LENGTH = 4096
+OBSERVED_PEER_CACHE_SIZE = 512
 
 
 class BridgeError(Exception):
@@ -606,6 +608,7 @@ class BridgeClient:
         self._send_lock = asyncio.Lock()
         self._rpc_timeout_sec = max(1.0, rpc_timeout_sec)
         self._flood_wait_max_sleep_sec = max(0.0, flood_wait_max_sleep_sec)
+        self._observed_peer_entities: OrderedDict[str, Any] = OrderedDict()
 
     @property
     def client(self) -> TelegramClient:
@@ -660,10 +663,42 @@ class BridgeClient:
                 raise _map_telegram_error(exc, action=action) from exc
         raise BridgeError(f"Telegram request failed while trying to {action}.")
 
+    def observe_peer_entity(
+        self,
+        entity: Any | None,
+        *,
+        peer: str | int | None = None,
+        extra_keys: Iterable[str | int] | None = None,
+    ) -> None:
+        if entity is None:
+            return
+        keys = _build_candidate_keys(peer=peer, entity=entity, extra_keys=extra_keys)
+        if not keys:
+            return
+        for key in keys:
+            self._observed_peer_entities[key] = entity
+            self._observed_peer_entities.move_to_end(key)
+        while len(self._observed_peer_entities) > OBSERVED_PEER_CACHE_SIZE:
+            self._observed_peer_entities.popitem(last=False)
+
+    def _get_observed_peer_entity(self, peer: str | int) -> Any | None:
+        normalized = _normalize_peer(peer)
+        if not normalized:
+            return None
+        entity = self._observed_peer_entities.get(normalized)
+        if entity is not None:
+            self._observed_peer_entities.move_to_end(normalized)
+        return entity
+
     async def _resolve_entity(self, peer: str | int, *, action: str) -> Any:
         if not await self.ensure_connected():
             raise BridgeUnavailableError("Telegram bridge is not connected.")
-        return await self._call_telegram(self._client.get_entity, peer, action=action)
+        observed = self._get_observed_peer_entity(peer)
+        if observed is not None:
+            return observed
+        entity = await self._call_telegram(self._client.get_entity, peer, action=action)
+        self.observe_peer_entity(entity, peer=peer)
+        return entity
 
     def _check_scope(
         self,
