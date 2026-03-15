@@ -2358,6 +2358,52 @@ test("strict DM validation accepts bound agent allowlist with telegram tools", (
   assert.equal(errors.length, 0);
 });
 
+test("strict DM validation fails for bound agent with acp runtime", () => {
+  const errors = __test.validateStrictDmAccountConfig(
+    {
+      agents: {
+        defaults: {
+          runtime: { type: "acp" },
+        },
+        list: [
+          {
+            id: "owner-agent",
+            tools: {
+              allow: ["telegram_owner_dm_send_message"],
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "owner-agent",
+          match: {
+            channel: "telegram-user-bridge",
+            accountId: "default",
+            peer: { kind: "direct", id: "123456789" },
+          },
+        },
+      ],
+    },
+    {
+      accountId: "default",
+      defaultAccountId: "default",
+      enabled: true,
+      label: "Telegram User DM",
+      baseUrl: "http://127.0.0.1:8765",
+      strictPeerBindings: true,
+      timeoutMs: 30000,
+      pollTimeoutMs: 25000,
+      pollIntervalMs: 1500,
+      allowFrom: ["123456789"],
+      writeTo: ["123456789"],
+    },
+    ["telegram_owner_dm", "telegram_owner"]
+  );
+
+  assert.match(errors.join("\n"), /runtime\.type=acp/);
+});
+
 test("ack helper retries transient failures and eventually succeeds", async () => {
   const calls = [];
   globalThis.fetch = async (url, init) => {

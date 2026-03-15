@@ -138,6 +138,31 @@ function collectProfileToolPrefixes(profiles: ProfileConfig[]): string[] {
   return Array.from(prefixes);
 }
 
+function extractRuntimeType(runtime: unknown): string | null {
+  if (!runtime || typeof runtime !== "object") return null;
+  const value = runtime as Record<string, unknown>;
+  if (typeof value.type === "string" && value.type.trim()) {
+    return value.type.trim().toLowerCase();
+  }
+  if (value.acp && typeof value.acp === "object") {
+    return "acp";
+  }
+  return null;
+}
+
+function resolveConfiguredAgentRuntimeType(cfg: Record<string, unknown>, agentId: string): string | null {
+  const agents = cfg.agents as Record<string, unknown> | undefined;
+  const defaults = (agents?.defaults as Record<string, unknown> | undefined)?.runtime;
+  const list = (agents?.list as Array<unknown> | undefined) ?? [];
+  const agent = list.find(
+    (item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string" &&
+      ((item as Record<string, unknown>).id as string).trim() === agentId
+  ) as Record<string, unknown> | undefined;
+  const explicit = extractRuntimeType(agent?.runtime);
+  if (explicit) return explicit;
+  return extractRuntimeType(defaults);
+}
+
 function isOwnerProfile(profile: ProfileConfig): boolean {
   return /^owner(?:$|[_-])/i.test(profile.id.trim());
 }
@@ -748,6 +773,13 @@ function validateStrictDmAccountConfig(
 
   const uniqueBoundAgents = new Set(Array.from(bindingByPeer.values()));
   for (const agentId of uniqueBoundAgents) {
+    const runtimeType = resolveConfiguredAgentRuntimeType(cfg, agentId);
+    if (runtimeType === "acp") {
+      errors.push(
+        `account "${account.accountId}": agent "${agentId}" uses runtime.type=acp; this runtime may expose only ACP developer tools and hide plugin tools in model schema`
+      );
+      continue;
+    }
     const agent = byAgentId.get(agentId);
     if (!agent) continue;
     const tools = (agent.tools as Record<string, unknown> | undefined) ?? undefined;

@@ -826,6 +826,7 @@ With `strictPeerBindings: true`, the plugin accepts inbound DMs only when `cfg.b
 `markReadOnInbound: false` disables Telegram read receipts for accepted inbound DMs on this channel account. When enabled, read status is sent only for DMs that are allowed for interaction, not merely readable.
 `typingWhileReplying: false` disables Telegram typing status while OpenClaw is generating a DM reply on this channel account.
 In strict mode, startup validation now also checks bound agents with explicit `tools.allow`: at least one `telegram_<context>_*` tool must be present, otherwise channel startup fails fast with a clear config error instead of silently falling back to core tools.
+Strict mode also fails startup when a bound agent resolves to `runtime.type=acp`, because ACP runtime setups may expose only ACP developer tools to the model and hide plugin-generated tools.
 Inbound DM media auto-download is enabled by default in backend (`TELEGRAM_DM_AUTO_DOWNLOAD_MEDIA=true`) and stores files under `TELEGRAM_DM_MEDIA_PATH`. Download happens only for DMs that pass this account's interaction allowlist at poll time.
 The channel also retries `/dm/inbox/ack` with a short request-level backoff, because ack is idempotent and safe to retry; the full inbound reply flow is not retried wholesale.
 Channel reload now watches both `channels.telegram-user-bridge` and `plugins.entries.telegram-user-bridge`, so channel account changes and plugin profile changes reload through the standard OpenClaw mechanism.
