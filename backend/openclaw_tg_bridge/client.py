@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
+from urllib.parse import urlparse
 
 from openclaw_tg_bridge.state import dialog_to_inventory_entry
 
@@ -136,6 +137,19 @@ def _entity_display_name(entity: Any | None) -> str | None:
     if username:
         return f"@{username}"
     return None
+
+
+def _display_text(value: Any) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    text_attr = getattr(value, "text", None)
+    if isinstance(text_attr, str) and text_attr.strip():
+        return text_attr.strip()
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _telethon_functions() -> Any:
@@ -1570,16 +1584,220 @@ class BridgeClient:
         link = link.strip()
         if not link:
             raise BridgeValidationError("link is required.")
-        invite_hash = link.rsplit("/", 1)[-1].lstrip("+")
         functions = _telethon_functions()
+        raw = link
+        if raw.startswith("@"):
+            target_type = "public"
+            target_value = raw[1:]
+        elif raw.startswith("+"):
+            target_type = "invite"
+            target_value = raw[1:]
+        else:
+            parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+            host = (parsed.netloc or "").strip().lower()
+            path_parts = [part for part in (parsed.path or "").split("/") if part]
+            known_hosts = {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}
+            target_type = "public"
+            target_value = ""
+            if host in known_hosts and path_parts:
+                first = path_parts[0]
+                if first.lower() == "joinchat" and len(path_parts) >= 2:
+                    target_type = "invite"
+                    target_value = path_parts[1]
+                elif first.startswith("+"):
+                    target_type = "invite"
+                    target_value = first[1:]
+                elif first.lower() == "s" and len(path_parts) >= 2:
+                    target_value = path_parts[1]
+                else:
+                    target_value = first
+            elif path_parts:
+                target_value = path_parts[-1]
+            else:
+                target_value = (parsed.netloc or raw).strip()
+            if target_value.startswith("+"):
+                target_type = "invite"
+                target_value = target_value[1:]
+        target_value = target_value.split("?", 1)[0].split("#", 1)[0].strip().lstrip("@")
+        if not target_value or any(ch.isspace() for ch in target_value):
+            raise BridgeValidationError("link is invalid.")
+
+        if target_type == "invite":
+            result = await self._call_telegram(
+                self._client.__call__,
+                functions.messages.ImportChatInviteRequest(hash=target_value),
+                action="join a chat by invite link",
+            )
+            chats = getattr(result, "chats", None) or []
+            chat = chats[0] if chats else None
+            return {"ok": True, "chat_id": getattr(chat, "id", None), "title": getattr(chat, "title", None), "join_type": "invite"}
+
+        entity = await self._resolve_entity(target_value, action="resolve public chat")
+        if not _is_channel_like(entity):
+            raise BridgeValidationError("Public link must resolve to a channel or supergroup.")
+        if getattr(entity, "left", None) is False:
+            return {
+                "ok": True,
+                "chat_id": getattr(entity, "id", None),
+                "title": _entity_display_name(entity),
+                "join_type": "public",
+                "already_joined": True,
+            }
         result = await self._call_telegram(
             self._client.__call__,
-            functions.messages.ImportChatInviteRequest(hash=invite_hash),
-            action="join a chat by invite link",
+            functions.channels.JoinChannelRequest(channel=entity),
+            action="join a public chat",
         )
         chats = getattr(result, "chats", None) or []
-        chat = chats[0] if chats else None
-        return {"ok": True, "chat_id": getattr(chat, "id", None), "title": getattr(chat, "title", None)}
+        chat = chats[0] if chats else entity
+        return {
+            "ok": True,
+            "chat_id": getattr(chat, "id", None),
+            "title": getattr(chat, "title", None) or _entity_display_name(entity),
+            "join_type": "public",
+        }
+
+    async def list_dialog_folders(
+        self,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for listing dialog folders.")
+        functions = _telethon_functions()
+        raw_filters = await self._call_telegram(
+            self._client.__call__,
+            functions.messages.GetDialogFiltersRequest(),
+            action="list dialog folders",
+        )
+        filters = list(raw_filters or [])
+
+        def _serialize_peer_ids(peers: Any) -> list[int]:
+            ids: list[int] = []
+            seen: set[int] = set()
+            for peer in peers or []:
+                peer_id = _extract_peer_id(peer)
+                if peer_id is None or peer_id in seen:
+                    continue
+                seen.add(peer_id)
+                ids.append(peer_id)
+            return ids
+
+        out: list[dict[str, Any]] = []
+        for item in filters:
+            if type(item).__name__ != "DialogFilter":
+                continue
+            folder_id = getattr(item, "id", None)
+            if not isinstance(folder_id, int):
+                continue
+            out.append(
+                {
+                    "id": folder_id,
+                    "title": _display_text(getattr(item, "title", None)),
+                    "emoticon": getattr(item, "emoticon", None),
+                    "contacts": bool(getattr(item, "contacts", False)),
+                    "non_contacts": bool(getattr(item, "non_contacts", False)),
+                    "groups": bool(getattr(item, "groups", False)),
+                    "broadcasts": bool(getattr(item, "broadcasts", False)),
+                    "bots": bool(getattr(item, "bots", False)),
+                    "exclude_muted": bool(getattr(item, "exclude_muted", False)),
+                    "exclude_read": bool(getattr(item, "exclude_read", False)),
+                    "exclude_archived": bool(getattr(item, "exclude_archived", False)),
+                    "pinned_peers": _serialize_peer_ids(getattr(item, "pinned_peers", None)),
+                    "include_peers": _serialize_peer_ids(getattr(item, "include_peers", None)),
+                    "exclude_peers": _serialize_peer_ids(getattr(item, "exclude_peers", None)),
+                }
+            )
+        out.sort(key=lambda folder: int(folder.get("id", 0)))
+        return out
+
+    async def upsert_dialog_folder(
+        self,
+        folder_id: int,
+        title: str,
+        *,
+        emoticon: str | None = None,
+        contacts: bool = False,
+        non_contacts: bool = False,
+        groups: bool = False,
+        broadcasts: bool = False,
+        bots: bool = False,
+        exclude_muted: bool = False,
+        exclude_read: bool = False,
+        exclude_archived: bool = False,
+        pinned_peers: list[str | int] | None = None,
+        include_peers: list[str | int] | None = None,
+        exclude_peers: list[str | int] | None = None,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for managing dialog folders.")
+        if folder_id < 1 or folder_id > 255:
+            raise BridgeValidationError("folder_id must be between 1 and 255.")
+        title = (title or "").strip()
+        if not title:
+            raise BridgeValidationError("title is required.")
+        emoticon_value = (emoticon or "").strip() or None
+        functions = _telethon_functions()
+        types = _telethon_types()
+
+        async def _resolve_input_peers(items: list[str | int] | None) -> list[Any]:
+            resolved: list[Any] = []
+            for peer in items or []:
+                entity = await self._resolve_entity(peer, action="resolve dialog folder peer")
+                input_peer = await self._call_telegram(
+                    self._client.get_input_entity,
+                    entity,
+                    action="resolve dialog folder peer",
+                )
+                resolved.append(input_peer)
+            return resolved
+
+        dialog_filter = types.DialogFilter(
+            title=title,
+            emoticon=emoticon_value,
+            contacts=bool(contacts),
+            non_contacts=bool(non_contacts),
+            groups=bool(groups),
+            broadcasts=bool(broadcasts),
+            bots=bool(bots),
+            exclude_muted=bool(exclude_muted),
+            exclude_read=bool(exclude_read),
+            exclude_archived=bool(exclude_archived),
+            pinned_peers=await _resolve_input_peers(pinned_peers),
+            include_peers=await _resolve_input_peers(include_peers),
+            exclude_peers=await _resolve_input_peers(exclude_peers),
+        )
+        await self._call_telegram(
+            self._client.__call__,
+            functions.messages.UpdateDialogFilterRequest(
+                id=folder_id,
+                filter=dialog_filter,
+            ),
+            action="update a dialog folder",
+        )
+        return {"ok": True, "folder_id": folder_id}
+
+    async def delete_dialog_folder(
+        self,
+        folder_id: int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        _require_self_write(policy.write_scope, detail="Writing is not allowed for deleting dialog folders.")
+        if folder_id < 1 or folder_id > 255:
+            raise BridgeValidationError("folder_id must be between 1 and 255.")
+        functions = _telethon_functions()
+        await self._call_telegram(
+            self._client.__call__,
+            functions.messages.UpdateDialogFilterRequest(
+                id=folder_id,
+                filter=None,
+            ),
+            action="delete a dialog folder",
+        )
+        return {"ok": True, "folder_id": folder_id}
 
     async def resolve_username(self, username: str) -> dict[str, Any]:
         entity = await self._resolve_entity(username, action="resolve username")

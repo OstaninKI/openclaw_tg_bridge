@@ -333,6 +333,10 @@ This will register tools like:
 - `telegram_owner_dm_list_topics`
 - `telegram_owner_dm_get_messages`
 - `telegram_owner_dm_send_message`
+- `telegram_owner_dm_join_chat_by_link`
+- `telegram_owner_dm_list_dialog_folders`
+- `telegram_owner_dm_upsert_dialog_folder`
+- `telegram_owner_dm_delete_dialog_folder`
 - `telegram_trusted_dm_get_dialogs`
 - `telegram_trusted_dm_list_topics`
 - `telegram_trusted_dm_get_messages`
@@ -364,8 +368,13 @@ Profiles with `"privilegedTools": true` keep that same baseline surface and addi
   - `telegram_owner_dm_create_channel`
   - `telegram_owner_dm_invite_to_group`
   - `telegram_owner_dm_join_chat_by_link`
+  - `telegram_owner_dm_list_dialog_folders`
+  - `telegram_owner_dm_upsert_dialog_folder`
+  - `telegram_owner_dm_delete_dialog_folder`
   - `telegram_owner_dm_get_invite_link`
   - `telegram_owner_dm_leave_chat`
+
+`join_chat_by_link` and dialog-folder tools are intentionally owner-only in plugin code and are registered only for owner-prefixed profile ids (for example `owner_dm`).
 
 Some moderation tools remain baseline, but only make sense on supergroups/channels:
 
@@ -471,6 +480,10 @@ Give each OpenClaw agent only its own tools:
             "telegram_owner_dm_list_topics",
             "telegram_owner_dm_get_messages",
             "telegram_owner_dm_send_message",
+            "telegram_owner_dm_join_chat_by_link",
+            "telegram_owner_dm_list_dialog_folders",
+            "telegram_owner_dm_upsert_dialog_folder",
+            "telegram_owner_dm_delete_dialog_folder",
             "telegram_sources_ro_list_sources",
             "telegram_sources_ro_sync_sources",
             "telegram_sources_ro_list_topics",
@@ -497,6 +510,9 @@ Give each OpenClaw agent only its own tools:
   }
 }
 ```
+
+If agents use explicit `tools.allow`, include `telegram_owner_dm_join_chat_by_link` for the owner profile, otherwise the agent cannot self-join channels from `t.me` links.
+Dialog-folder management tools are owner-only and are registered only for profile ids that start with `owner` (for example `owner_dm`).
 
 This is the main separation mechanism. One agent should never get the other agent's DM tool set.
 
@@ -789,7 +805,7 @@ Each profile can define:
 
 These are backend-enforced overrides on top of the JSON policy file. If omitted, the backend uses the policy file and environment defaults.
 
-`privilegedTools: true` exposes backend-host file tools and self-account/contact mutation tools for that profile. Profiles without it still get the normal chat/message/admin reading surface, but not file/download/contact/create/join/leave flows. Any profile that uses privileged tools should also include `"me"` in backend `write.allow`.
+`privilegedTools: true` exposes backend-host file tools and self-account/contact mutation tools for that profile. Profiles without it still get the normal chat/message/admin reading surface, but not file/download/contact/create/invite/leave flows. Join-by-link and dialog-folder flows are additionally owner-only in plugin code. Any profile that uses privileged tools should also include `"me"` in backend `write.allow`.
 
 For event-driven DMs, also configure `channels.telegram-user-bridge.accounts.<id>` with:
 

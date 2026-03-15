@@ -58,6 +58,10 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
 
   assert.ok(getTool(api, "telegram_owner_send_message"));
   assert.ok(getTool(api, "telegram_owner_send_file"));
+  assert.ok(getTool(api, "telegram_owner_list_dialog_folders"));
+  assert.ok(getTool(api, "telegram_owner_upsert_dialog_folder"));
+  assert.ok(getTool(api, "telegram_owner_delete_dialog_folder"));
+  assert.ok(getTool(api, "telegram_owner_join_chat_by_link"));
   assert.ok(getTool(api, "telegram_owner_send_location"));
   assert.ok(getTool(api, "telegram_owner_edit_message"));
   assert.ok(getTool(api, "telegram_owner_delete_message"));
@@ -69,6 +73,7 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   assert.ok(getTool(api, "telegram_owner_get_admins"));
   assert.ok(getTool(api, "telegram_shared_get_messages"));
   assert.equal(getTool(api, "telegram_shared_send_file"), undefined);
+  assert.equal(getTool(api, "telegram_shared_list_dialog_folders"), undefined);
   assert.equal(getTool(api, "telegram_shared_download_media"), undefined);
   assert.equal(getTool(api, "telegram_shared_add_contact"), undefined);
   assert.equal(getTool(api, "telegram_user_send_message"), undefined);
@@ -141,6 +146,27 @@ test("explicit interactive profile skips privileged tools by default", async () 
   assert.equal(getTool(api, "telegram_trusted_create_group"), undefined);
 });
 
+test("dialog-folder tools are owner-only even for other privileged profiles", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "admin_dm", label: "Admin", mode: "interactive", privilegedTools: true }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  assert.ok(getTool(api, "telegram_admin_dm_send_file"));
+  assert.equal(getTool(api, "telegram_admin_dm_join_chat_by_link"), undefined);
+  assert.equal(getTool(api, "telegram_admin_dm_list_dialog_folders"), undefined);
+  assert.equal(getTool(api, "telegram_admin_dm_upsert_dialog_folder"), undefined);
+  assert.equal(getTool(api, "telegram_admin_dm_delete_dialog_folder"), undefined);
+});
+
 test("plugin downloads media via backend endpoint", async () => {
   const api = createApi();
   register(api);
@@ -162,6 +188,60 @@ test("plugin downloads media via backend endpoint", async () => {
     "http://127.0.0.1:8765/download_media?peer=-1001&message_id=77&output_path=%2Ftmp%2Fphoto.jpg"
   );
   assert.match(result.content[0].text, /Media downloaded/);
+});
+
+test("owner dialog-folder tools call backend endpoints", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "owner_dm", label: "Owner", privilegedTools: true, policyProfile: "owner_dm" }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  const seen = [];
+  globalThis.fetch = async (url, init = {}) => {
+    seen.push({ url: String(url), init });
+    if (String(url).includes("/dialog_folders")) {
+      if (String(url).endsWith("/dialog_folders")) {
+        return new Response(
+          JSON.stringify({
+            folders: [{ id: 3, title: "News", include_peers: [101], exclude_peers: [], pinned_peers: [] }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, folder_id: 3 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${String(url)}`);
+  };
+
+  const listRes = await getTool(api, "telegram_owner_dm_list_dialog_folders").execute("1", {});
+  const upsertRes = await getTool(api, "telegram_owner_dm_upsert_dialog_folder").execute("2", {
+    folder_id: 3,
+    title: "News",
+    include_peers: ["@theinsider"],
+    broadcasts: true,
+  });
+  const deleteRes = await getTool(api, "telegram_owner_dm_delete_dialog_folder").execute("3", { folder_id: 3 });
+
+  assert.equal(seen[0].url, "http://127.0.0.1:8765/dialog_folders");
+  assert.equal(seen[1].url, "http://127.0.0.1:8765/dialog_folders/upsert");
+  assert.equal(seen[2].url, "http://127.0.0.1:8765/dialog_folders/delete");
+  assert.match(listRes.content[0].text, /News/);
+  assert.match(upsertRes.content[0].text, /updated/i);
+  assert.match(deleteRes.content[0].text, /deleted/i);
 });
 
 test("plugin sends reaction and block user via backend endpoints", async () => {

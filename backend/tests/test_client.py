@@ -821,6 +821,143 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["chat_id"], 555)
         self.mock_tg.__call__.assert_awaited_once()
 
+    async def test_join_chat_by_link_supports_public_t_me_username(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["me"])
+        entity = SimpleNamespace(id=777, title="The Insider", broadcast=True, megagroup=False, left=True)
+        self.mock_tg.get_entity.return_value = entity
+        functions_ns = SimpleNamespace(
+            channels=SimpleNamespace(JoinChannelRequest=lambda **kwargs: {"kind": "join_channel", **kwargs}),
+            messages=SimpleNamespace(ImportChatInviteRequest=lambda **kwargs: {"kind": "import_invite", **kwargs}),
+        )
+        self.mock_tg.__call__.return_value = SimpleNamespace(chats=[SimpleNamespace(id=777, title="The Insider")])
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            result = await bridge.join_chat_by_link("https://t.me/theinsider")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["join_type"], "public")
+        self.mock_tg.get_entity.assert_awaited_once_with("theinsider")
+        self.mock_tg.__call__.assert_awaited_once_with({"kind": "join_channel", "channel": entity})
+
+    async def test_join_chat_by_link_supports_invite_hash(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["me"])
+        functions_ns = SimpleNamespace(
+            channels=SimpleNamespace(JoinChannelRequest=lambda **kwargs: {"kind": "join_channel", **kwargs}),
+            messages=SimpleNamespace(ImportChatInviteRequest=lambda **kwargs: {"kind": "import_invite", **kwargs}),
+        )
+        self.mock_tg.__call__.return_value = SimpleNamespace(chats=[SimpleNamespace(id=888, title="Invite Chat")])
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            result = await bridge.join_chat_by_link("https://t.me/+AbCdEf")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["join_type"], "invite")
+        self.mock_tg.get_entity.assert_not_awaited()
+        self.mock_tg.__call__.assert_awaited_once_with({"kind": "import_invite", "hash": "AbCdEf"})
+
+    async def test_list_dialog_folders_requires_self_write_access(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+
+        with self.assertRaisesRegex(BridgeForbiddenError, "listing dialog folders"):
+            await bridge.list_dialog_folders()
+
+    async def test_list_dialog_folders_serializes_dialog_filter_entries(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["me"])
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(GetDialogFiltersRequest=lambda **kwargs: {"kind": "get_dialog_filters", **kwargs})
+        )
+        dialog_filter_cls = type("DialogFilter", (), {})
+        custom_filter = dialog_filter_cls()
+        custom_filter.id = 3
+        custom_filter.title = "News"
+        custom_filter.emoticon = "📰"
+        custom_filter.contacts = False
+        custom_filter.non_contacts = True
+        custom_filter.groups = True
+        custom_filter.broadcasts = True
+        custom_filter.bots = False
+        custom_filter.exclude_muted = False
+        custom_filter.exclude_read = True
+        custom_filter.exclude_archived = False
+        custom_filter.pinned_peers = [SimpleNamespace(channel_id=101)]
+        custom_filter.include_peers = [SimpleNamespace(channel_id=202), SimpleNamespace(channel_id=202)]
+        custom_filter.exclude_peers = [SimpleNamespace(chat_id=303)]
+        self.mock_tg.__call__.return_value = [
+            custom_filter,
+            SimpleNamespace(id=0),  # non-custom folder; should be ignored
+        ]
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            folders = await bridge.list_dialog_folders()
+
+        self.assertEqual(len(folders), 1)
+        self.assertEqual(folders[0]["id"], 3)
+        self.assertEqual(folders[0]["title"], "News")
+        self.assertEqual(folders[0]["include_peers"], [202])
+        self.assertEqual(folders[0]["exclude_peers"], [303])
+        self.mock_tg.__call__.assert_awaited_once_with({"kind": "get_dialog_filters"})
+
+    async def test_upsert_dialog_folder_updates_filter(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["me"])
+        entity = SimpleNamespace(id=202, username="theinsider")
+        input_entity = SimpleNamespace(id=202, access_hash=777)
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_input_entity.return_value = input_entity
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(UpdateDialogFilterRequest=lambda **kwargs: {"kind": "update_dialog_filter", **kwargs})
+        )
+        types_ns = SimpleNamespace(DialogFilter=lambda **kwargs: {"kind": "dialog_filter", **kwargs})
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns), patch(
+            "openclaw_tg_bridge.client._telethon_types", return_value=types_ns
+        ):
+            result = await bridge.upsert_dialog_folder(
+                3,
+                "News",
+                broadcasts=True,
+                include_peers=["@theinsider"],
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["folder_id"], 3)
+        self.mock_tg.get_entity.assert_awaited_once_with("@theinsider")
+        self.mock_tg.get_input_entity.assert_awaited_once_with(entity)
+        self.mock_tg.__call__.assert_awaited_once_with(
+            {
+                "kind": "update_dialog_filter",
+                "id": 3,
+                "filter": {
+                    "kind": "dialog_filter",
+                    "title": "News",
+                    "emoticon": None,
+                    "contacts": False,
+                    "non_contacts": False,
+                    "groups": False,
+                    "broadcasts": True,
+                    "bots": False,
+                    "exclude_muted": False,
+                    "exclude_read": False,
+                    "exclude_archived": False,
+                    "pinned_peers": [],
+                    "include_peers": [input_entity],
+                    "exclude_peers": [],
+                },
+            }
+        )
+
+    async def test_delete_dialog_folder_clears_filter(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["me"])
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(UpdateDialogFilterRequest=lambda **kwargs: {"kind": "update_dialog_filter", **kwargs})
+        )
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            result = await bridge.delete_dialog_folder(5)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["folder_id"], 5)
+        self.mock_tg.__call__.assert_awaited_once_with({"kind": "update_dialog_filter", "id": 5, "filter": None})
+
     async def test_promote_admin_supports_basic_groups(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["42", "7"])
         self.mock_tg.get_entity.side_effect = [

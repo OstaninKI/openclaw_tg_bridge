@@ -117,6 +117,10 @@ function slugifyToolId(value: string): string {
   return slug || "profile";
 }
 
+function isOwnerProfile(profile: ProfileConfig): boolean {
+  return /^owner(?:$|[_-])/i.test(profile.id.trim());
+}
+
 function normalizeProfile(raw: Record<string, unknown>, fallbackId: string): ProfileConfig | null {
   const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : fallbackId;
   if (raw.enabled === false) return null;
@@ -1286,6 +1290,8 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
   const optional = { optional: true };
   const isSourcesReadOnly = profile.mode === "sources_ro";
   const allowPrivilegedTools = !isSourcesReadOnly && profile.privilegedTools === true;
+  const allowOwnerJoinTools = allowPrivilegedTools && isOwnerProfile(profile);
+  const allowOwnerFolderTools = allowPrivilegedTools && isOwnerProfile(profile);
 
   if (!isSourcesReadOnly) {
     api.registerTool(
@@ -1711,11 +1717,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
       );
     }
 
-    if (allowPrivilegedTools) {
+    if (allowOwnerJoinTools) {
       api.registerTool(
         {
           name: `${prefix}_join_chat_by_link`,
-          description: `Join a Telegram chat by invite link using the "${profileLabel}" context.`,
+          description:
+            `Join a Telegram channel/supergroup by invite or public link using the "${profileLabel}" context. ` +
+            "Supports links like https://t.me/+hash and https://t.me/channel_username.",
           parameters: Type.Object({
             link: Type.String({ minLength: 1 }),
           }),
@@ -1727,6 +1735,150 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
             if (!res.ok) return toolResult(formatBridgeError(res));
             const chatId = (res.data as { chat_id?: unknown } | undefined)?.chat_id;
             return toolResult(chatId ? `Joined chat (id: ${chatId}).` : "Joined chat.");
+          },
+        },
+        optional
+      );
+    }
+
+    if (allowOwnerFolderTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_list_dialog_folders`,
+          description:
+            `List Telegram dialog folders using the "${profileLabel}" context. ` +
+            "Owner-only tool for managing personal channel/chat folders.",
+          parameters: Type.Object({}),
+          async execute() {
+            const res = await fetchBridge(api, profile, "/dialog_folders");
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            const folders =
+              (res.data as {
+                folders?: Array<{
+                  id?: unknown;
+                  title?: string;
+                  emoticon?: string;
+                  include_peers?: Array<unknown>;
+                  exclude_peers?: Array<unknown>;
+                  pinned_peers?: Array<unknown>;
+                }>;
+              } | undefined)?.folders ?? [];
+            const lines = folders.map((folder) => {
+              const parts = [
+                `id:${folder.id ?? "?"}`,
+                folder.title ? `title:${folder.title}` : null,
+                folder.emoticon ? `emoji:${folder.emoticon}` : null,
+                Array.isArray(folder.include_peers) ? `include:${folder.include_peers.length}` : null,
+                Array.isArray(folder.exclude_peers) ? `exclude:${folder.exclude_peers.length}` : null,
+                Array.isArray(folder.pinned_peers) ? `pinned:${folder.pinned_peers.length}` : null,
+              ].filter(Boolean);
+              return `- ${parts.join(" | ")}`;
+            });
+            return toolResult(lines.length ? lines.join("\n") : "No dialog folders.");
+          },
+        },
+        optional
+      );
+    }
+
+    if (allowOwnerFolderTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_upsert_dialog_folder`,
+          description:
+            `Create or update one Telegram dialog folder using the "${profileLabel}" context. ` +
+            "Owner-only tool for managing personal channel/chat folders.",
+          parameters: Type.Object({
+            folder_id: Type.Number({ minimum: 1, maximum: 255 }),
+            title: Type.String({ minLength: 1, maxLength: 64 }),
+            emoticon: Type.Optional(Type.String()),
+            contacts: Type.Optional(Type.Boolean({ default: false })),
+            non_contacts: Type.Optional(Type.Boolean({ default: false })),
+            groups: Type.Optional(Type.Boolean({ default: false })),
+            broadcasts: Type.Optional(Type.Boolean({ default: false })),
+            bots: Type.Optional(Type.Boolean({ default: false })),
+            exclude_muted: Type.Optional(Type.Boolean({ default: false })),
+            exclude_read: Type.Optional(Type.Boolean({ default: false })),
+            exclude_archived: Type.Optional(Type.Boolean({ default: false })),
+            pinned_peers: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Number()]))),
+            include_peers: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Number()]))),
+            exclude_peers: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Number()]))),
+          }),
+          async execute(
+            _id: string,
+            params: {
+              folder_id: number;
+              title: string;
+              emoticon?: string;
+              contacts?: boolean;
+              non_contacts?: boolean;
+              groups?: boolean;
+              broadcasts?: boolean;
+              bots?: boolean;
+              exclude_muted?: boolean;
+              exclude_read?: boolean;
+              exclude_archived?: boolean;
+              pinned_peers?: Array<string | number>;
+              include_peers?: Array<string | number>;
+              exclude_peers?: Array<string | number>;
+            }
+          ) {
+            const res = await fetchBridge(api, profile, "/dialog_folders/upsert", {
+              method: "POST",
+              body: JSON.stringify({
+                folder_id: Math.max(1, Math.min(255, Math.trunc(params.folder_id))),
+                title: params.title,
+                emoticon: params.emoticon ?? null,
+                contacts: params.contacts ?? false,
+                non_contacts: params.non_contacts ?? false,
+                groups: params.groups ?? false,
+                broadcasts: params.broadcasts ?? false,
+                bots: params.bots ?? false,
+                exclude_muted: params.exclude_muted ?? false,
+                exclude_read: params.exclude_read ?? false,
+                exclude_archived: params.exclude_archived ?? false,
+                pinned_peers: Array.isArray(params.pinned_peers) ? params.pinned_peers : [],
+                include_peers: Array.isArray(params.include_peers) ? params.include_peers : [],
+                exclude_peers: Array.isArray(params.exclude_peers) ? params.exclude_peers : [],
+              }),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            const folderId = (res.data as { folder_id?: unknown } | undefined)?.folder_id;
+            return toolResult(
+              typeof folderId === "number"
+                ? `Dialog folder ${folderId} updated.`
+                : "Dialog folder updated."
+            );
+          },
+        },
+        optional
+      );
+    }
+
+    if (allowOwnerFolderTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_delete_dialog_folder`,
+          description:
+            `Delete one Telegram dialog folder using the "${profileLabel}" context. ` +
+            "Owner-only tool for managing personal channel/chat folders.",
+          parameters: Type.Object({
+            folder_id: Type.Number({ minimum: 1, maximum: 255 }),
+          }),
+          async execute(_id: string, params: { folder_id: number }) {
+            const res = await fetchBridge(api, profile, "/dialog_folders/delete", {
+              method: "POST",
+              body: JSON.stringify({
+                folder_id: Math.max(1, Math.min(255, Math.trunc(params.folder_id))),
+              }),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            const folderId = (res.data as { folder_id?: unknown } | undefined)?.folder_id;
+            return toolResult(
+              typeof folderId === "number"
+                ? `Dialog folder ${folderId} deleted.`
+                : "Dialog folder deleted."
+            );
           },
         },
         optional

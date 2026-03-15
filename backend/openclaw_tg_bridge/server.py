@@ -452,6 +452,27 @@ class InviteLinkBody(BaseModel):
     link: str = Field(..., min_length=1)
 
 
+class DialogFolderUpsertBody(BaseModel):
+    folder_id: int = Field(..., ge=1, le=255)
+    title: str = Field(..., min_length=1, max_length=64)
+    emoticon: str | None = None
+    contacts: bool = False
+    non_contacts: bool = False
+    groups: bool = False
+    broadcasts: bool = False
+    bots: bool = False
+    exclude_muted: bool = False
+    exclude_read: bool = False
+    exclude_archived: bool = False
+    pinned_peers: list[str | int] = Field(default_factory=list)
+    include_peers: list[str | int] = Field(default_factory=list)
+    exclude_peers: list[str | int] = Field(default_factory=list)
+
+
+class DialogFolderDeleteBody(BaseModel):
+    folder_id: int = Field(..., ge=1, le=255)
+
+
 class AdminMutationBody(BaseModel):
     peer: str | int = Field(..., description="Group/channel username or id")
     user_peer: str | int = Field(..., description="User username or id")
@@ -1452,6 +1473,67 @@ async def join_chat_by_link(request: Request, body: InviteLinkBody):
         raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
     except Exception:
         logger.exception("join_chat_by_link failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.get("/dialog_folders")
+async def dialog_folders(request: Request):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return {"folders": await bridge.list_dialog_folders(policy_overrides=overrides)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("dialog_folders failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/dialog_folders/upsert")
+async def upsert_dialog_folder(request: Request, body: DialogFolderUpsertBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.upsert_dialog_folder(
+            body.folder_id,
+            body.title,
+            emoticon=body.emoticon,
+            contacts=body.contacts,
+            non_contacts=body.non_contacts,
+            groups=body.groups,
+            broadcasts=body.broadcasts,
+            bots=body.bots,
+            exclude_muted=body.exclude_muted,
+            exclude_read=body.exclude_read,
+            exclude_archived=body.exclude_archived,
+            pinned_peers=body.pinned_peers,
+            include_peers=body.include_peers,
+            exclude_peers=body.exclude_peers,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("upsert_dialog_folder failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/dialog_folders/delete")
+async def delete_dialog_folder(request: Request, body: DialogFolderDeleteBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.delete_dialog_folder(body.folder_id, policy_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("delete_dialog_folder failed")
         raise HTTPException(status_code=502, detail="Request failed")
 
 
