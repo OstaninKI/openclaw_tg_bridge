@@ -12,6 +12,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     auth_p = sub.add_parser("auth", help="Create session locally (interactive)")
     auth_p.add_argument("--session-path", default=None, help="Session file path")
+    auth_p.add_argument("--api-id", default=None, help="Telegram API ID (or use TELEGRAM_API_ID)")
+    auth_p.add_argument("--api-hash", default=None, help="Telegram API hash (or use TELEGRAM_API_HASH)")
+    auth_p.add_argument("--phone", default=None, help="Telegram phone number (or use TELEGRAM_PHONE)")
     auth_p.add_argument(
         "--print-session-string",
         action="store_true",
@@ -34,6 +37,9 @@ def main() -> None:
             session_path=args.session_path,
             print_session_string=args.print_session_string,
             session_string_out=args.session_string_out,
+            api_id_value=args.api_id,
+            api_hash_value=args.api_hash,
+            phone_value=args.phone,
         )
         return
 

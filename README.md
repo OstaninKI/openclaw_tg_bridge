@@ -136,6 +136,31 @@ To make routing deterministic as well, add exact OpenClaw `bindings` by Telegram
 
 Run locally, not on the VPS:
 
+Fast path from the repository root:
+
+```bash
+sh ./create_telethon_session.sh ~/.openclaw/telethon/openclaw_user.session
+```
+
+The script reuses `backend/.venv` if it already exists. Otherwise it creates a temporary virtualenv, installs the local backend package, runs the existing interactive `auth` CLI, removes the temporary virtualenv on exit, and cleans leftover SQLite sidecar files such as `-journal` / `-wal` / `-shm`. Only the final `.session` file remains.
+
+You can still pass extra auth flags through the script, for example:
+
+```bash
+sh ./create_telethon_session.sh ~/.openclaw/telethon/openclaw_user.session --print-session-string
+```
+
+To minimize prompts, you can prefill the auth step via env vars or CLI flags. The auth CLI now accepts `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, and `TELEGRAM_PHONE` (or `--api-id`, `--api-hash`, `--phone`). That lets OpenClaw preconfigure everything except the live Telegram code / optional 2FA password:
+
+```bash
+TELEGRAM_API_ID=12345 \
+TELEGRAM_API_HASH=your_api_hash \
+TELEGRAM_PHONE=+1234567890 \
+sh ./create_telethon_session.sh ~/.openclaw/telethon/openclaw_user.session
+```
+
+Manual path:
+
 ```bash
 cd backend
 python3 -m venv .venv
@@ -169,7 +194,7 @@ export TELEGRAM_BRIDGE_API_TOKEN=secret
 python -m openclaw_tg_bridge run
 ```
 
-For a persistent deploy, use the example systemd unit at [openclaw-tg-bridge.service](/Users/ostaninki/Documents/Projects/OpenClaw_tg_bridge/deploy/openclaw-tg-bridge.service). It already includes restart policy and a small set of safe hardening flags.
+For a persistent deploy, use the example systemd unit at [deploy/openclaw-tg-bridge.service](./deploy/openclaw-tg-bridge.service). It already includes restart policy and a small set of safe hardening flags.
 
 Recommended production rule:
 
@@ -189,7 +214,7 @@ sudo systemctl status openclaw-tg-bridge
 
 ### 4. Create the backend policy file
 
-Example `policy.json`:
+Example `policy.json`. The easiest path is to copy [deploy/policy.json.example](./deploy/policy.json.example) to `~/.openclaw/telethon/policy.json` and replace the placeholder ids:
 
 ```json
 {
@@ -310,21 +335,16 @@ This will register tools like:
 - `telegram_sources_ro_list_topics`
 - `telegram_sources_ro_get_messages`
 
-All interactive profiles expose the baseline chat surface such as `send_message`, `send_location`, `edit_message`, `delete_message`, `forward_message`, `get_message`, `search_messages`, `get_participants`, `get_admins`, `get_chat`, `get_history`, `search_public_chats`, reactions, and topic-aware reading.
+All interactive profiles expose the baseline chat/message/admin surface. That includes tools such as `send_message`, `send_location`, `edit_message`, `delete_message`, `forward_message`, `get_message`, `get_history`, `search_messages`, `get_participants`, `get_admins`, `promote_admin`, `demote_admin`, `get_chat`, `search_public_chats`, `get_pinned_messages`, `send_reaction`, `remove_reaction`, `get_message_reactions`, `resolve_username`, `get_user_status`, `get_media_info`, and topic-aware reading.
 
-Profiles with `"privilegedTools": true` additionally expose backend-host file tools and self-account/contact mutation tools. Tool names follow the same prefix pattern, for example:
+Profiles with `"privilegedTools": true` keep that same baseline surface and additionally expose backend-host file tools plus self-account/contact mutation tools. The extra tools are:
 
-- messaging/media:
+- backend-host file tools:
   - `telegram_owner_dm_send_file`
   - `telegram_owner_dm_send_voice`
   - `telegram_owner_dm_send_sticker`
-  - `telegram_owner_dm_send_location`
-  - `telegram_owner_dm_edit_message`
-  - `telegram_owner_dm_delete_message`
-  - `telegram_owner_dm_forward_message`
   - `telegram_owner_dm_download_media`
-  - `telegram_owner_dm_get_media_info`
-- contacts and users:
+- contacts and self-account flows:
   - `telegram_owner_dm_list_contacts`
   - `telegram_owner_dm_search_contacts`
   - `telegram_owner_dm_add_contact`
@@ -332,33 +352,20 @@ Profiles with `"privilegedTools": true` additionally expose backend-host file to
   - `telegram_owner_dm_block_user`
   - `telegram_owner_dm_unblock_user`
   - `telegram_owner_dm_get_blocked_users`
-  - `telegram_owner_dm_resolve_username`
-  - `telegram_owner_dm_get_user_status`
-- groups/channels/admin:
+- account/group lifecycle flows:
   - `telegram_owner_dm_create_group`
   - `telegram_owner_dm_create_channel`
   - `telegram_owner_dm_invite_to_group`
   - `telegram_owner_dm_join_chat_by_link`
   - `telegram_owner_dm_get_invite_link`
-  - `telegram_owner_dm_get_participants`
-  - `telegram_owner_dm_get_admins` for groups, supergroups, and channels
-  - `telegram_owner_dm_promote_admin` for groups, supergroups, and channels
-  - `telegram_owner_dm_demote_admin` for groups, supergroups, and channels
-  - `telegram_owner_dm_get_banned_users` for supergroups/channels
-  - `telegram_owner_dm_ban_user` for supergroups/channels
-  - `telegram_owner_dm_unban_user` for supergroups/channels
   - `telegram_owner_dm_leave_chat`
-- reading/analytics:
-  - `telegram_owner_dm_get_chat`
-  - `telegram_owner_dm_get_message`
-  - `telegram_owner_dm_get_history`
-  - `telegram_owner_dm_search_messages`
-  - `telegram_owner_dm_search_public_chats`
-  - `telegram_owner_dm_get_recent_actions` for supergroups/channels
-  - `telegram_owner_dm_get_pinned_messages`
-  - `telegram_owner_dm_send_reaction`
-  - `telegram_owner_dm_remove_reaction`
-  - `telegram_owner_dm_get_message_reactions`
+
+Some moderation tools remain baseline, but only make sense on supergroups/channels:
+
+- `telegram_owner_dm_get_banned_users`
+- `telegram_owner_dm_ban_user`
+- `telegram_owner_dm_unban_user`
+- `telegram_owner_dm_get_recent_actions`
 
 ### 6. Configure the inbound DM channel
 
@@ -620,6 +627,35 @@ Operational rule for OpenClaw self-management:
 - it may add, update, or remove only `trusted*_dm` entries by default;
 - it must not rename, remove, or rebind the existing owner DM baseline unless you explicitly ask for that change.
 
+## OpenClaw self-install playbook
+
+If OpenClaw is running in this repository workspace, it can install and configure the bridge with very little manual help. The preferred instruction source for that flow is the workspace skill [skills/telegram-user-bridge-setup/SKILL.md](./skills/telegram-user-bridge-setup/SKILL.md).
+
+Minimal user interaction should be only:
+
+- provide or confirm `api_id` / `api_hash`;
+- provide or confirm the owner Telegram `sender_id`;
+- optionally provide additional trusted sender ids;
+- enter the Telegram login code and optional 2FA password when prompted.
+
+Recommended self-install sequence for OpenClaw:
+
+1. run `npm ci` in [plugin](./plugin);
+2. link the plugin from the local repo with `openclaw plugins install --link /absolute/path/to/repo/plugin`;
+3. create or refresh [backend/.venv](./backend/.venv) and run `pip install -e .` in [backend](./backend);
+4. create the Telegram session via [create_telethon_session.sh](./create_telethon_session.sh), preferably with `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, and `TELEGRAM_PHONE` prefilled;
+5. copy [deploy/policy.json.example](./deploy/policy.json.example) to `~/.openclaw/telethon/policy.json` and replace placeholder ids;
+6. merge [deploy/openclaw.json.example](./deploy/openclaw.json.example) into `~/.openclaw/openclaw.json` without overwriting unrelated user config;
+7. restart or reload OpenClaw after the initial install and structural config changes;
+8. verify `curl http://127.0.0.1:8765/health`, tool registration, and exact DM `bindings`.
+
+Editing boundaries for OpenClaw:
+
+- it should only modify the `telegram-user-bridge` plugin/channel subtrees, exact related `bindings`, and the dedicated `agents.list` entries for this bridge;
+- it should preserve unrelated OpenClaw config;
+- it should keep `strictPeerBindings: true` and `session.dmScope = "per-channel-peer"` for the multi-user DM model;
+- it should treat `owner_dm` as protected baseline and extend only `trusted*_dm` by default.
+
 ## Scheduling and token economy
 
 For groups/channels/forums and periodic processing:
@@ -679,7 +715,7 @@ Recommended minimal manual checks after deployment:
 
 1. send a plain text message;
 2. for every interactive profile: edit/delete one of your own messages and read recent messages;
-3. for the privileged owner profile only: send a file, voice note, sticker, and location pin;
+3. send a location pin from any interactive profile that is allowed to write, and from the privileged owner profile also send a file, voice note, and sticker;
 4. for the privileged owner profile only: read one message, download its media, and inspect media metadata;
 5. for the privileged owner profile only: list contacts, add one test contact, then delete it;
 6. for the privileged owner profile only: block and unblock one test user;

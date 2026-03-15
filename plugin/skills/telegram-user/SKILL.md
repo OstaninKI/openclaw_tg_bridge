@@ -32,12 +32,13 @@ The same Telegram account may be exposed to multiple OpenClaw contexts, for exam
 
 ## Tools
 
-- Interactive DM tools: `telegram_<context>_send_message`, `telegram_<context>_get_dialogs`, `telegram_<context>_list_topics`, `telegram_<context>_get_messages`
+- Interactive DM tools: `telegram_<context>_send_message`, `telegram_<context>_get_dialogs`
 - Additional interactive tools:
   - baseline chat/message/admin tools: `telegram_<context>_send_location`, `telegram_<context>_edit_message`, `telegram_<context>_delete_message`, `telegram_<context>_forward_message`, `telegram_<context>_get_media_info`, `telegram_<context>_resolve_username`, `telegram_<context>_get_user_status`, `telegram_<context>_get_participants`, `telegram_<context>_get_admins`, `telegram_<context>_promote_admin`, `telegram_<context>_demote_admin`, `telegram_<context>_get_chat`, `telegram_<context>_get_message`, `telegram_<context>_get_history`, `telegram_<context>_search_messages`, `telegram_<context>_search_public_chats`, `telegram_<context>_get_pinned_messages`, `telegram_<context>_send_reaction`, `telegram_<context>_remove_reaction`, `telegram_<context>_get_message_reactions`
   - privileged backend-host/self-account tools, only on profiles with `privilegedTools: true`: `telegram_<context>_send_file`, `telegram_<context>_send_voice`, `telegram_<context>_send_sticker`, `telegram_<context>_download_media`, `telegram_<context>_list_contacts`, `telegram_<context>_search_contacts`, `telegram_<context>_add_contact`, `telegram_<context>_delete_contact`, `telegram_<context>_block_user`, `telegram_<context>_unblock_user`, `telegram_<context>_get_blocked_users`, `telegram_<context>_create_group`, `telegram_<context>_create_channel`, `telegram_<context>_invite_to_group`, `telegram_<context>_join_chat_by_link`, `telegram_<context>_get_invite_link`, `telegram_<context>_leave_chat`
-  - supergroup/channel moderation only: `telegram_<context>_get_banned_users`, `telegram_<context>_ban_user`, `telegram_<context>_unban_user`, `telegram_<context>_get_recent_actions`
-- Source polling tools: `telegram_<context>_list_sources`, `telegram_<context>_sync_sources`, `telegram_<context>_list_topics`, `telegram_<context>_get_messages`
+  - baseline tools with chat-type limits: `telegram_<context>_get_banned_users`, `telegram_<context>_ban_user`, `telegram_<context>_unban_user`, `telegram_<context>_get_recent_actions` work only on supergroups/channels
+- Shared reading/polling tools: `telegram_<context>_list_topics`, `telegram_<context>_get_messages`
+- Source polling tools for `sources_ro`: `telegram_<context>_list_sources`, `telegram_<context>_sync_sources`, `telegram_<context>_list_topics`, `telegram_<context>_get_messages`
 
 Examples of context ids: `owner_dm`, `trusted_dm`, `trusted_alice_dm`, `sources_ro`.
 

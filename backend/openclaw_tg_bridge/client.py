@@ -200,6 +200,18 @@ def _message_sender_name(message: Any, *, sender: Any | None = None) -> str | No
     return None
 
 
+def _reaction_label(reaction: Any) -> str | None:
+    if reaction is None:
+        return None
+    emoticon = getattr(reaction, "emoticon", None)
+    if isinstance(emoticon, str) and emoticon.strip():
+        return emoticon
+    document_id = getattr(reaction, "document_id", None)
+    if isinstance(document_id, int):
+        return f"custom:{document_id}"
+    return None
+
+
 def _serialize_message_entities(message: Any) -> list[dict[str, Any]]:
     entities: list[dict[str, Any]] = []
     text = getattr(message, "text", None) or getattr(message, "message", None) or ""
@@ -1008,15 +1020,22 @@ class BridgeClient:
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
         _require_self_write(policy.write_scope, detail="Downloading media to the backend host is not allowed for this profile.")
-        message = await self.get_message(peer, message_id, policy_overrides=policy_overrides)
-        entity = await self._resolve_entity(peer, action="download media")
+        if message_id < 1:
+            raise BridgeValidationError("message_id must be >= 1.")
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
         tg_message = await self._call_telegram(
             self._client.get_messages,
             entity,
             ids=message_id,
             action="download media",
         )
-        if tg_message is None or getattr(tg_message, "media", None) is None:
+        if tg_message is None:
+            raise BridgeValidationError("Message not found.")
+        if getattr(tg_message, "media", None) is None:
             raise BridgeValidationError("Message does not contain downloadable media.")
         file_path = await self._call_telegram(
             self._client.download_media,
@@ -1027,7 +1046,7 @@ class BridgeClient:
         return {
             "ok": True,
             "path": file_path,
-            "message": message,
+            "message": _serialize_message(tg_message, entity=entity),
         }
 
     async def search_messages(
@@ -1556,12 +1575,16 @@ class BridgeClient:
         )
         self._require_channel_like(entity, action="listing banned users")
         types = _telethon_types()
+        try:
+            kicked_filter = types.ChannelParticipantsKicked(q="")
+        except TypeError:
+            kicked_filter = types.ChannelParticipantsKicked()
         users = await self._call_telegram(
             self._client.get_participants,
             entity,
             limit=min(max(1, limit), 200),
             offset=max(0, offset),
-            filter=types.ChannelParticipantsKicked(),
+            filter=kicked_filter,
             action="list banned users",
         )
         return [
@@ -2053,16 +2076,18 @@ class BridgeClient:
             ),
             action="read message reactions",
         )
-        reactions: list[dict[str, Any]] = []
+        aggregated: dict[str, int] = {}
         for reaction in getattr(result, "reactions", []) or []:
             reaction_type = getattr(reaction, "reaction", None)
-            reactions.append(
-                {
-                    "count": getattr(reaction, "count", None),
-                    "emoji": getattr(reaction_type, "emoticon", None),
-                }
-            )
-        return reactions
+            label = _reaction_label(reaction_type) or "unknown"
+            count = getattr(reaction, "count", 1)
+            if not isinstance(count, int) or count < 1:
+                count = 1
+            aggregated[label] = aggregated.get(label, 0) + count
+        return [
+            {"emoji": emoji, "count": count}
+            for emoji, count in sorted(aggregated.items(), key=lambda item: (-item[1], item[0]))
+        ]
 
     async def leave_chat(
         self,

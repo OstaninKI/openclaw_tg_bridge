@@ -528,6 +528,30 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message["latitude"], 35.1)
         self.assertEqual(message["longitude"], 33.4)
 
+    async def test_download_media_fetches_message_once_and_serializes_it(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"], write_allow_chat_ids=["me", "42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        tg_message = SimpleNamespace(
+            id=71,
+            text="photo from field",
+            date=datetime(2026, 3, 14, 10, 0, tzinfo=timezone.utc),
+            out=False,
+            sender_id=7,
+            media=SimpleNamespace(),
+            file=SimpleNamespace(name="photo.jpg", size=1234, mime_type="image/jpeg"),
+        )
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_messages.return_value = tg_message
+        self.mock_tg.download_media.return_value = "/tmp/photo.jpg"
+
+        result = await bridge.download_media("42", 71, output_path="/tmp/out.bin")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["path"], "/tmp/photo.jpg")
+        self.assertEqual(result["message"]["id"], 71)
+        self.mock_tg.get_messages.assert_awaited_once_with(entity, ids=71)
+        self.mock_tg.download_media.assert_awaited_once_with(tg_message, file="/tmp/out.bin")
+
     async def test_search_messages_serializes_results(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"])
         entity = SimpleNamespace(id=42, username="allowed")
@@ -696,6 +720,25 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(BridgeValidationError, "channels and supergroups"):
             await bridge.get_banned_users("42")
 
+    async def test_get_banned_users_uses_empty_query_filter(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        self.mock_tg.get_entity.return_value = SimpleNamespace(id=42, title="Ops", megagroup=True)
+        self.mock_tg.get_participants.return_value = [
+            SimpleNamespace(id=7, username="alice", first_name="Alice", last_name=None)
+        ]
+        types_ns = SimpleNamespace(ChannelParticipantsKicked=lambda **kwargs: {"kind": "kicked", **kwargs})
+
+        with patch("openclaw_tg_bridge.client._telethon_types", return_value=types_ns):
+            users = await bridge.get_banned_users("42", limit=10, offset=2)
+
+        self.assertEqual(users[0]["id"], 7)
+        self.mock_tg.get_participants.assert_awaited_once_with(
+            self.mock_tg.get_entity.return_value,
+            limit=10,
+            offset=2,
+            filter={"kind": "kicked", "q": ""},
+        )
+
     async def test_send_reaction_uses_input_peer(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["42"])
         entity = SimpleNamespace(id=42, username="allowed")
@@ -726,15 +769,16 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         )
         self.mock_tg.__call__.return_value = SimpleNamespace(
             reactions=[
-                SimpleNamespace(count=3, reaction=SimpleNamespace(emoticon="🔥")),
-                SimpleNamespace(count=1, reaction=SimpleNamespace(emoticon="👍")),
+                SimpleNamespace(reaction=SimpleNamespace(emoticon="🔥")),
+                SimpleNamespace(reaction=SimpleNamespace(emoticon="👍")),
+                SimpleNamespace(reaction=SimpleNamespace(emoticon="🔥")),
             ]
         )
 
         with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
             reactions = await bridge.get_message_reactions("42", 77, limit=20)
 
-        self.assertEqual(reactions, [{"count": 3, "emoji": "🔥"}, {"count": 1, "emoji": "👍"}])
+        self.assertEqual(reactions, [{"count": 2, "emoji": "🔥"}, {"count": 1, "emoji": "👍"}])
 
     async def test_get_chat_loads_full_channel_info(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"])

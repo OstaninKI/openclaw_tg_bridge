@@ -1,0 +1,56 @@
+{
+  "defaults": {
+    "replyDelaySec": 2,
+    "replyDelayMaxSec": 6,
+    "read": {
+      "allow": ["*"],
+      "deny": []
+    },
+    "write": {
+      "allow": [],
+      "deny": []
+    }
+  },
+  "profiles": {
+    "owner_dm": {
+      "read": {
+        "allow": ["123456789"]
+      },
+      "write": {
+        "allow": ["123456789", "me"]
+      }
+    },
+    "trusted_dm": {
+      "read": {
+        "allow": ["987654321"]
+      },
+      "write": {
+        "allow": ["987654321"]
+      }
+    },
+    "sources_ro": {
+      "read": {
+        "allow": [],
+        "deny": []
+      },
+      "write": {
+        "allow": [],
+        "deny": []
+      },
+      "sources": {
+        "autoDiscover": true,
+        "includeTypes": ["group", "supergroup", "forum", "channel"],
+        "excludePeers": ["123456789", "987654321"],
+        "excludeUsernames": []
+      }
+    },
+    "dm_inbox": {
+      "read": {
+        "allow": ["123456789", "987654321"]
+      },
+      "write": {
+        "allow": ["123456789", "987654321"]
+      }
+    }
+  }
+}

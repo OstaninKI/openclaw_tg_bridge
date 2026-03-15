@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import getpass
+import os
 import sys
 from pathlib import Path
 
@@ -40,6 +41,9 @@ def main(
     session_path: str | None = None,
     print_session_string: bool = False,
     session_string_out: str | None = None,
+    api_id_value: str | None = None,
+    api_hash_value: str | None = None,
+    phone_value: str | None = None,
 ) -> None:
     from telethon import TelegramClient
     from telethon.errors import SessionPasswordNeededError
@@ -48,7 +52,8 @@ def main(
     print("OpenClaw Telegram Bridge — create session locally (do not run on VPS).")
     print("Get api_id and api_hash from https://my.telegram.org (API Development tools).\n")
 
-    api_id_s = _prompt("API ID")
+    api_id_default = (api_id_value or os.environ.get("TELEGRAM_API_ID", "")).strip() or None
+    api_id_s = api_id_default or _prompt("API ID")
     if not api_id_s:
         print("API ID is required.", file=sys.stderr)
         sys.exit(1)
@@ -58,7 +63,9 @@ def main(
         print("API ID must be a number.", file=sys.stderr)
         sys.exit(1)
 
-    api_hash = _prompt("API Hash", secret=True)
+    api_hash = (api_hash_value or os.environ.get("TELEGRAM_API_HASH", "")).strip()
+    if not api_hash:
+        api_hash = _prompt("API Hash", secret=True)
     if not api_hash:
         print("API Hash is required.", file=sys.stderr)
         sys.exit(1)
@@ -72,7 +79,9 @@ def main(
         client = TelegramClient(session_name, api_id, api_hash)
         await client.connect()
         if not await client.is_user_authorized():
-            phone = _prompt("Phone number (international format, e.g. +79001234567)")
+            phone = (phone_value or os.environ.get("TELEGRAM_PHONE", "")).strip()
+            if not phone:
+                phone = _prompt("Phone number (international format, e.g. +79001234567)")
             if not phone:
                 print("Phone is required.", file=sys.stderr)
                 await client.disconnect()
@@ -119,6 +128,9 @@ def main(
 def cli(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Create a Telegram session locally for OpenClaw")
     parser.add_argument("--session-path", default=None, help="Session file path (default: ./openclaw_user)")
+    parser.add_argument("--api-id", default=None, help="Telegram API ID (or use TELEGRAM_API_ID)")
+    parser.add_argument("--api-hash", default=None, help="Telegram API hash (or use TELEGRAM_API_HASH)")
+    parser.add_argument("--phone", default=None, help="Telegram phone number (or use TELEGRAM_PHONE)")
     parser.add_argument(
         "--print-session-string",
         action="store_true",
@@ -134,6 +146,9 @@ def cli(argv: list[str] | None = None) -> None:
         session_path=args.session_path,
         print_session_string=args.print_session_string,
         session_string_out=args.session_string_out,
+        api_id_value=args.api_id,
+        api_hash_value=args.api_hash,
+        phone_value=args.phone,
     )
 
 
