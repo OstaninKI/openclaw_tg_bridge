@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from openclaw_tg_bridge.client import (
+    BridgeError,
     BridgeClient,
     BridgeForbiddenError,
     BridgeRateLimitError,
@@ -228,6 +229,21 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(BridgeValidationError, "Invalid Telegram peer"):
             await bridge.get_messages("@missing")
+
+    async def test_get_messages_maps_peer_related_value_error_to_validation(self) -> None:
+        bridge = self.create_bridge()
+        self.mock_tg.get_entity.side_effect = ValueError("Cannot find any entity corresponding to '@missing'")
+
+        with self.assertRaisesRegex(BridgeValidationError, "Invalid Telegram peer"):
+            await bridge.get_messages("@missing")
+
+    async def test_get_messages_keeps_generic_value_error_as_bridge_error(self) -> None:
+        bridge = self.create_bridge()
+        self.mock_tg.get_entity.side_effect = ValueError("bad locale data")
+
+        with self.assertRaises(BridgeError) as cm:
+            await bridge.get_messages("@missing")
+        self.assertIn("Telegram request failed while trying to read messages", cm.exception.detail)
 
     async def test_policy_override_is_enforced_on_backend(self) -> None:
         bridge = self.create_bridge()
@@ -820,6 +836,48 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["chat_id"], 555)
         self.mock_tg.__call__.assert_awaited_once()
+
+    async def test_create_channel_sets_broadcast_for_channels(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["me"])
+        functions_ns = SimpleNamespace(
+            channels=SimpleNamespace(CreateChannelRequest=lambda **kwargs: {"kind": "create_channel", **kwargs})
+        )
+        self.mock_tg.__call__.return_value = SimpleNamespace(chats=[SimpleNamespace(id=556, title="News")])
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            result = await bridge.create_channel("News", about="Updates", megagroup=False)
+
+        self.assertEqual(result["chat_id"], 556)
+        self.mock_tg.__call__.assert_awaited_once_with(
+            {
+                "kind": "create_channel",
+                "title": "News",
+                "about": "Updates",
+                "broadcast": True,
+                "megagroup": False,
+            }
+        )
+
+    async def test_create_channel_sets_megagroup_flags(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["me"])
+        functions_ns = SimpleNamespace(
+            channels=SimpleNamespace(CreateChannelRequest=lambda **kwargs: {"kind": "create_channel", **kwargs})
+        )
+        self.mock_tg.__call__.return_value = SimpleNamespace(chats=[SimpleNamespace(id=557, title="Ops")])
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            result = await bridge.create_channel("Ops", megagroup=True)
+
+        self.assertEqual(result["chat_id"], 557)
+        self.mock_tg.__call__.assert_awaited_once_with(
+            {
+                "kind": "create_channel",
+                "title": "Ops",
+                "about": "",
+                "broadcast": False,
+                "megagroup": True,
+            }
+        )
 
     async def test_join_chat_by_link_supports_public_t_me_username(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["me"])

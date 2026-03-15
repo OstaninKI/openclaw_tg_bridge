@@ -583,7 +583,6 @@ def _map_telegram_error(exc: BaseException, *, action: str) -> BridgeError:
         "InviteHashInvalidError",
         "ChatIdInvalidError",
         "ChannelInvalidError",
-        "ValueError",
     }
     forbidden_errors = {
         "ChatWriteForbiddenError",
@@ -603,6 +602,19 @@ def _map_telegram_error(exc: BaseException, *, action: str) -> BridgeError:
 
     if name in invalid_peer_errors:
         return BridgeValidationError(f"Invalid Telegram peer for {action}.")
+    if isinstance(exc, ValueError):
+        message = str(exc).lower()
+        peer_related_markers = (
+            "cannot find any entity",
+            "cannot cast",
+            "username",
+            "peer",
+            "chat id",
+            "channel",
+            "user id",
+        )
+        if any(marker in message for marker in peer_related_markers):
+            return BridgeValidationError(f"Invalid Telegram peer for {action}.")
     if name in forbidden_errors:
         return BridgeForbiddenError(f"Telegram denied permission to {action}.")
     if name in auth_errors:
@@ -1499,13 +1511,15 @@ class BridgeClient:
         title = title.strip()
         if not title:
             raise BridgeValidationError("title is required.")
+        is_megagroup = bool(megagroup)
         functions = _telethon_functions()
         result = await self._call_telegram(
             self._client.__call__,
             functions.channels.CreateChannelRequest(
                 title=title,
                 about=(about or "").strip(),
-                megagroup=megagroup,
+                broadcast=not is_megagroup,
+                megagroup=is_megagroup,
             ),
             action="create a channel",
         )
