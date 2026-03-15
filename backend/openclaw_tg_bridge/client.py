@@ -1764,7 +1764,7 @@ class BridgeClient:
 
         dialog_filter = types.DialogFilter(
             id=folder_id,
-            title=title,
+            title=types.TextWithEntities(text=title, entities=[]),
             emoticon=emoticon_value,
             contacts=bool(contacts),
             non_contacts=bool(non_contacts),

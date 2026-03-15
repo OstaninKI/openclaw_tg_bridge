@@ -869,7 +869,7 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         dialog_filter_cls = type("DialogFilter", (), {})
         custom_filter = dialog_filter_cls()
         custom_filter.id = 3
-        custom_filter.title = "News"
+        custom_filter.title = SimpleNamespace(text="News")
         custom_filter.emoticon = "📰"
         custom_filter.contacts = False
         custom_filter.non_contacts = True
@@ -908,7 +908,10 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         functions_ns = SimpleNamespace(
             messages=SimpleNamespace(UpdateDialogFilterRequest=lambda **kwargs: {"kind": "update_dialog_filter", **kwargs})
         )
-        types_ns = SimpleNamespace(DialogFilter=lambda **kwargs: {"kind": "dialog_filter", **kwargs})
+        types_ns = SimpleNamespace(
+            DialogFilter=lambda **kwargs: {"kind": "dialog_filter", **kwargs},
+            TextWithEntities=lambda **kwargs: {"kind": "text_with_entities", **kwargs},
+        )
 
         with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns), patch(
             "openclaw_tg_bridge.client._telethon_types", return_value=types_ns
@@ -931,7 +934,7 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
                 "filter": {
                     "kind": "dialog_filter",
                     "id": 3,
-                    "title": "News",
+                    "title": {"kind": "text_with_entities", "text": "News", "entities": []},
                     "emoticon": None,
                     "contacts": False,
                     "non_contacts": False,
