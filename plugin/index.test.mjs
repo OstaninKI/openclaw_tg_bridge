@@ -487,6 +487,34 @@ test("plugin registers DM channel and channel outbound uses backend send_message
   assert.equal(sendResult.messageId, 321);
 });
 
+test("DM channel outbound rejects missing target with clear error", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            policyProfile: "dm_inbox",
+            allowFrom: ["123"],
+            writeTo: ["123"],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  await assert.rejects(
+    api.channels[0].outbound.sendText({
+      to: undefined,
+      text: "hello",
+      accountId: "default",
+      cfg: api.config,
+    }),
+    /outbound target is missing or invalid/i
+  );
+});
+
 test("DM gateway startAccount works with channelRuntime and explicit stopAccount", async () => {
   const api = createApi({
     channels: {

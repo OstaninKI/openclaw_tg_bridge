@@ -605,7 +605,10 @@ function buildDmTarget(senderId: string | number): string {
   return `${CHANNEL_ID}:${String(senderId)}`;
 }
 
-function stripDmTargetPrefix(target: string): string {
+function stripDmTargetPrefix(target: unknown): string {
+  if (typeof target !== "string") {
+    return "";
+  }
   return target.trim().replace(/^(telegram-user-bridge|tguser|tgdm):/i, "").trim();
 }
 
@@ -942,9 +945,13 @@ function registerDmChannel(api: PluginApi): void {
         cfg: Record<string, unknown>;
       }) => {
         const account = resolveDmChannelAccountFromConfig(cfg, pluginConfig, accountId);
+        const peer = stripDmTargetPrefix(to);
+        if (!peer) {
+          throw new Error("telegram-user-bridge outbound target is missing or invalid.");
+        }
         const response = await fetchBridgeWithConfig(account, account, "/send_message", {
           method: "POST",
-          body: JSON.stringify({ peer: stripDmTargetPrefix(to), text, reply_to: null }),
+          body: JSON.stringify({ peer, text, reply_to: null }),
         });
         if (!response.ok) {
           throw new Error(formatBridgeError(response));
