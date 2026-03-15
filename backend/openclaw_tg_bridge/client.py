@@ -765,6 +765,65 @@ class BridgeClient:
             )
             return {"ok": True, "message_id": getattr(result, "id", None)}
 
+    async def mark_read(
+        self,
+        peer: str | int,
+        *,
+        max_message_id: int | None = None,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="marking messages as read",
+            scope=policy.read_scope,
+        )
+        self._check_scope(
+            scope=policy.write_scope,
+            candidate_keys=_build_candidate_keys(peer=peer, entity=entity),
+            peer=peer,
+            action="interacting",
+        )
+        kwargs: dict[str, Any] = {}
+        if isinstance(max_message_id, int) and max_message_id > 0:
+            kwargs["max_id"] = max_message_id
+        await self._call_telegram(
+            self._client.send_read_acknowledge,
+            entity,
+            action="mark messages as read",
+            **kwargs,
+        )
+        return {"ok": True}
+
+    async def send_typing(
+        self,
+        peer: str | int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="writing",
+            scope=policy.write_scope,
+        )
+        functions = _telethon_functions()
+        types = _telethon_types()
+        input_peer = await self._call_telegram(
+            self._client.get_input_entity,
+            entity,
+            action="resolve typing peer",
+        )
+        await self._call_telegram(
+            self._client.__call__,
+            functions.messages.SetTypingRequest(
+                peer=input_peer,
+                action=types.SendMessageTypingAction(),
+            ),
+            action="send typing status",
+        )
+        return {"ok": True}
+
     async def send_file(
         self,
         peer: str | int,

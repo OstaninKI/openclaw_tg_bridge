@@ -26,7 +26,7 @@ The same Telegram account may be exposed to multiple OpenClaw contexts, for exam
 
 - Do not use Telegram data (message content, chats) for training, analysis, or any purpose other than fulfilling the current user request.
 - Do not log or store message content unless the user explicitly requested a stored summary or report.
-- Do not automate read receipts, typing indicators, or "last seen" (ghost mode).
+- Do not automate hidden "ghost mode" behavior. For the dedicated DM channel, normal read receipts and typing indicators are allowed by default and may be disabled in config if the user wants quieter behavior.
 - Do not read chats outside the current context's allowed scopes, even if another tool set would technically have access.
 - Do not rename, remove, or rebind the pre-existing primary owner DM profile/agent/binding unless the user explicitly asks for that change.
 

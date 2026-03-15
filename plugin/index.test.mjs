@@ -455,6 +455,8 @@ test("plugin registers DM channel and channel outbound uses backend send_message
     pollTimeoutMs: 25000,
     pollIntervalMs: 1500,
     strictPeerBindings: true,
+    markReadOnInbound: true,
+    typingWhileReplying: true,
     policyProfile: "dm_inbox",
     allowFrom: ["123"],
     writeTo: ["123"],
@@ -610,6 +612,8 @@ test("DM gateway records structured last route and acknowledges processed inboun
             strictPeerBindings: true,
             allowFrom: ["123456789"],
             writeTo: ["123456789"],
+            markReadOnInbound: false,
+            typingWhileReplying: false,
           },
         },
       },
@@ -755,6 +759,161 @@ test("DM gateway records structured last route and acknowledges processed inboun
     message_id: 42,
   });
   assert.match(JSON.stringify(statuses), /polling/);
+});
+
+test("DM gateway can mark read and send typing while generating replies", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            strictPeerBindings: true,
+            allowFrom: ["123456789"],
+            writeTo: ["123456789"],
+            markReadOnInbound: true,
+            typingWhileReplying: true,
+          },
+        },
+      },
+    },
+    bindings: [
+      {
+        agentId: "owner-agent",
+        match: {
+          channel: "telegram-user-bridge",
+          accountId: "default",
+          peer: { kind: "direct", id: "123456789" },
+        },
+      },
+    ],
+  });
+  register(api);
+
+  const account = api.channels[0].config.resolveAccount(api.config, "default");
+  const abortController = new AbortController();
+  const seen = [];
+  let acked = null;
+  const ackedPromise = new Promise((resolve) => {
+    acked = resolve;
+  });
+  const event = {
+    id: 43,
+    text: "hello from telegram",
+    sender_id: "123456789",
+    sender_name: "Alice",
+    sender_username: "alice",
+    date: "2026-03-14T10:00:00+00:00",
+  };
+  let pollCount = 0;
+
+  globalThis.fetch = async (url, init = {}) => {
+    const normalizedUrl = String(url);
+    seen.push({ url: normalizedUrl, init });
+    if (normalizedUrl.includes("/dm/inbox/poll")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({ events: pollCount === 1 ? [event] : [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/read")) {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/typing")) {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/send_message")) {
+      return new Response(JSON.stringify({ ok: true, message_id: 1001 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/inbox/ack")) {
+      abortController.abort();
+      acked();
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${normalizedUrl}`);
+  };
+
+  const channelRuntime = {
+    reply: {
+      resolveEnvelopeFormatOptions() {
+        return {};
+      },
+      formatAgentEnvelope({ body }) {
+        return body;
+      },
+      finalizeInboundContext(ctx) {
+        return ctx;
+      },
+      async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions }) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await dispatcherOptions.deliver({ text: "reply from agent" });
+      },
+    },
+    routing: {
+      buildAgentSessionKey() {
+        return "dm-session-key";
+      },
+    },
+    session: {
+      resolveStorePath() {
+        return "/tmp/test";
+      },
+      readSessionUpdatedAt() {
+        return 0;
+      },
+      async recordInboundSession() {},
+    },
+  };
+
+  const handle = await api.channels[0].gateway.startAccount({
+    account,
+    cfg: api.config,
+    channelRuntime,
+    abortSignal: abortController.signal,
+    getStatus() {
+      return null;
+    },
+    setStatus() {},
+  });
+
+  try {
+    await Promise.race([
+      ackedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timed out waiting for DM ack")), 500)),
+    ]);
+  } finally {
+    await handle.stop();
+  }
+
+  const requestUrls = seen.map((item) => item.url);
+  assert.ok(requestUrls.some((url) => url.includes("/dm/read")));
+  assert.ok(requestUrls.some((url) => url.includes("/dm/typing")));
+  assert.ok(requestUrls.some((url) => url.includes("/send_message")));
+
+  const readRequest = seen.find((item) => item.url.includes("/dm/read"));
+  const typingRequest = seen.find((item) => item.url.includes("/dm/typing"));
+  assert.deepEqual(JSON.parse(readRequest.init.body), {
+    sender_id: "123456789",
+    sender_username: "alice",
+    message_id: 43,
+  });
+  assert.deepEqual(JSON.parse(typingRequest.init.body), {
+    sender_id: "123456789",
+    sender_username: "alice",
+  });
 });
 
 test("strict DM binding resolves exact sender to agent", () => {

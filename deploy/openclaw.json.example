@@ -47,6 +47,8 @@
           "apiToken": "change-me",
           "policyProfile": "dm_inbox",
           "strictPeerBindings": true,
+          "markReadOnInbound": true,
+          "typingWhileReplying": true,
           "allowFrom": ["123456789", "987654321"],
           "writeTo": ["123456789", "987654321"],
           "pollTimeoutMs": 25000,

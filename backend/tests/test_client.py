@@ -57,6 +57,7 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.mock_tg.connect = AsyncMock()
         self.mock_tg.disconnect = AsyncMock()
         self.mock_tg.get_entity = AsyncMock()
+        self.mock_tg.send_read_acknowledge = AsyncMock()
         self.mock_tg.send_message = AsyncMock()
         self.mock_tg.send_file = AsyncMock()
         self.mock_tg.edit_message = AsyncMock()
@@ -121,6 +122,58 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.mock_tg.get_entity.assert_not_awaited()
         self.mock_tg.send_message.assert_awaited_once_with(observed, "hello", reply_to=None)
         sleep_mock.assert_awaited()
+
+    async def test_mark_read_uses_observed_entity(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["1470044"])
+        observed = SimpleNamespace(id=1470044, username="alloweduser", access_hash=12345)
+        bridge.observe_peer_entity(observed, peer="1470044")
+
+        result = await bridge.mark_read(
+            "1470044",
+            max_message_id=55,
+            policy_overrides={"write_allow_chat_ids": ["1470044"]},
+        )
+
+        self.assertTrue(result["ok"])
+        self.mock_tg.get_entity.assert_not_awaited()
+        self.mock_tg.send_read_acknowledge.assert_awaited_once_with(observed, max_id=55)
+
+    async def test_mark_read_requires_interaction_scope(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["1470044"])
+        observed = SimpleNamespace(id=1470044, username="alloweduser", access_hash=12345)
+        bridge.observe_peer_entity(observed, peer="1470044")
+
+        with self.assertRaisesRegex(BridgeForbiddenError, "Interacting is not allowed"):
+            await bridge.mark_read("1470044", max_message_id=55)
+
+        self.mock_tg.send_read_acknowledge.assert_not_awaited()
+
+    async def test_send_typing_uses_write_scope_and_input_peer(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["1470044"])
+        observed = SimpleNamespace(id=1470044, username="alloweduser", access_hash=12345)
+        input_entity = SimpleNamespace(id=1470044)
+        bridge.observe_peer_entity(observed, peer="1470044")
+        self.mock_tg.get_input_entity.return_value = input_entity
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(SetTypingRequest=lambda **kwargs: {"kind": "typing", **kwargs})
+        )
+        types_ns = SimpleNamespace(SendMessageTypingAction=lambda: {"kind": "typing_action"})
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns), patch(
+            "openclaw_tg_bridge.client._telethon_types", return_value=types_ns
+        ):
+            result = await bridge.send_typing("1470044")
+
+        self.assertTrue(result["ok"])
+        self.mock_tg.get_entity.assert_not_awaited()
+        self.mock_tg.get_input_entity.assert_awaited_once_with(observed)
+        self.mock_tg.__call__.assert_awaited_once_with(
+            {
+                "kind": "typing",
+                "peer": input_entity,
+                "action": {"kind": "typing_action"},
+            }
+        )
 
     async def test_send_message_blocks_when_resolved_entity_matches_write_denylist(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["42"], write_deny_chat_ids=["42"])

@@ -792,9 +792,13 @@ For event-driven DMs, also configure `channels.telegram-user-bridge.accounts.<id
 - `pollTimeoutMs`
 - `pollIntervalMs`
 - `strictPeerBindings`
+- `markReadOnInbound` (optional, default `true`)
+- `typingWhileReplying` (optional, default `true`)
 
 Use numeric Telegram user ids there when possible. They are more stable than usernames for inbound routing and cursor tracking.
 With `strictPeerBindings: true`, the plugin accepts inbound DMs only when `cfg.bindings` contains an exact peer binding for that sender.
+`markReadOnInbound: false` disables Telegram read receipts for accepted inbound DMs on this channel account. When enabled, read status is sent only for DMs that are allowed for interaction, not merely readable.
+`typingWhileReplying: false` disables Telegram typing status while OpenClaw is generating a DM reply on this channel account.
 The channel also retries `/dm/inbox/ack` with a short request-level backoff, because ack is idempotent and safe to retry; the full inbound reply flow is not retried wholesale.
 Channel reload now watches both `channels.telegram-user-bridge` and `plugins.entries.telegram-user-bridge`, so channel account changes and plugin profile changes reload through the standard OpenClaw mechanism.
 When `/dm/inbox/poll` keeps failing, the DM channel also backs off progressively instead of retrying every `pollIntervalMs`.
@@ -809,7 +813,7 @@ What the implementation does to reduce risk:
 - one message per request;
 - serialized sends with human-like delays;
 - explicit rate-limit handling;
-- no hidden read-status or typing hacks;
+- DM read receipts / typing indicators enabled by default for the interactive DM channel, but individually disableable in channel config;
 - default deny on writes;
 - read-only source ingestion by scheduler;
 - small, incremental reads for scheduled jobs.

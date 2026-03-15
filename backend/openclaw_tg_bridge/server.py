@@ -465,6 +465,11 @@ class AckDmInboxBody(BaseModel):
     message_id: int = Field(..., ge=1)
 
 
+class DmPeerBody(BaseModel):
+    sender_id: str | int = Field(..., description="Sender id or normalized peer key")
+    sender_username: str | None = None
+
+
 def _dedupe_peers(values: list[str]) -> list[str]:
     seen: set[str] = set()
     deduped: list[str] = []
@@ -531,6 +536,23 @@ async def resolve_request_policy(request: Request) -> dict:
 def _resolve_dm_consumer_id(policy: dict) -> str:
     profile = policy.get("policy_profile")
     return str(profile).strip() if profile else "default"
+
+
+def _match_allowed_dm_sender(
+    allowed_senders: list[AllowedDmSender],
+    sender_id: str | int,
+    sender_username: str | None = None,
+) -> AllowedDmSender | None:
+    sender_key = _normalize_peer(sender_id)
+    username_key = _normalize_peer(sender_username)
+    return next(
+        (
+            sender
+            for sender in allowed_senders
+            if sender_key in sender.match_keys or (username_key and username_key in sender.match_keys)
+        ),
+        None,
+    )
 
 
 async def _resolve_allowed_dm_senders(bridge: BridgeClient, policy: dict) -> list[AllowedDmSender]:
@@ -1500,16 +1522,7 @@ async def ack_dm_inbox(request: Request, body: AckDmInboxBody):
     try:
         policy = await resolve_request_policy(request)
         allowed_senders = await _resolve_allowed_dm_senders(bridge, policy)
-        sender_key = _normalize_peer(body.sender_id)
-        sender_username = _normalize_peer(body.sender_username)
-        allowed = next(
-            (
-                sender
-                for sender in allowed_senders
-                if sender_key in sender.match_keys or (sender_username and sender_username in sender.match_keys)
-            ),
-            None,
-        )
+        allowed = _match_allowed_dm_sender(allowed_senders, body.sender_id, body.sender_username)
         if allowed is None:
             raise HTTPException(status_code=403, detail="Ack is not allowed for this sender.")
 
@@ -1531,6 +1544,57 @@ async def ack_dm_inbox(request: Request, body: AckDmInboxBody):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         logger.exception("ack_dm_inbox failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/dm/read")
+async def mark_dm_read(request: Request, body: AckDmInboxBody):
+    bridge = get_bridge()
+    try:
+        policy = await resolve_request_policy(request)
+        allowed_senders = await _resolve_allowed_dm_senders(bridge, policy)
+        allowed = _match_allowed_dm_sender(allowed_senders, body.sender_id, body.sender_username)
+        if allowed is None:
+            raise HTTPException(status_code=403, detail="Read receipt is not allowed for this sender.")
+
+        return await bridge.mark_read(
+            allowed.cursor_key,
+            max_message_id=body.message_id,
+            policy_overrides=policy,
+        )
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("mark_dm_read failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/dm/typing")
+async def send_dm_typing(request: Request, body: DmPeerBody):
+    bridge = get_bridge()
+    try:
+        policy = await resolve_request_policy(request)
+        allowed_senders = await _resolve_allowed_dm_senders(bridge, policy)
+        allowed = _match_allowed_dm_sender(allowed_senders, body.sender_id, body.sender_username)
+        if allowed is None:
+            raise HTTPException(status_code=403, detail="Typing status is not allowed for this sender.")
+
+        return await bridge.send_typing(
+            allowed.cursor_key,
+            policy_overrides=policy,
+        )
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("send_dm_typing failed")
         raise HTTPException(status_code=502, detail="Request failed")
 
 

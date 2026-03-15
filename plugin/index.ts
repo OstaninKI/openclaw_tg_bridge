@@ -57,6 +57,8 @@ type ChannelAccountConfig = PolicyHeaderConfig & {
   timeoutMs: number;
   pollTimeoutMs: number;
   pollIntervalMs: number;
+  markReadOnInbound: boolean;
+  typingWhileReplying: boolean;
 };
 
 type DmChannelConfig = {
@@ -179,6 +181,8 @@ function normalizeChannelAccount(
     pollTimeoutMs,
     pollIntervalMs:
       typeof raw.pollIntervalMs === "number" && raw.pollIntervalMs >= 0 ? raw.pollIntervalMs : 1500,
+    markReadOnInbound: raw.markReadOnInbound !== false,
+    typingWhileReplying: raw.typingWhileReplying !== false,
     policyProfile:
       typeof raw.policyProfile === "string" && raw.policyProfile.trim() ? raw.policyProfile.trim() : undefined,
     replyDelaySec: typeof raw.replyDelaySec === "number" ? raw.replyDelaySec : undefined,
@@ -662,6 +666,70 @@ async function ackInboundDmEvent(account: ChannelAccountConfig, event: DmInboxEv
   throw lastError ?? new Error("Failed to acknowledge inbound DM.");
 }
 
+async function markInboundDmRead(account: ChannelAccountConfig, event: DmInboxEvent): Promise<void> {
+  const response = await fetchBridgeWithConfig(account, account, "/dm/read", {
+    method: "POST",
+    body: JSON.stringify({
+      sender_id: event.sender_id,
+      sender_username: event.sender_username ?? null,
+      message_id: event.id,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(formatBridgeError(response));
+  }
+}
+
+async function sendInboundDmTyping(account: ChannelAccountConfig, event: DmInboxEvent): Promise<void> {
+  const response = await fetchBridgeWithConfig(account, account, "/dm/typing", {
+    method: "POST",
+    body: JSON.stringify({
+      sender_id: event.sender_id,
+      sender_username: event.sender_username ?? null,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(formatBridgeError(response));
+  }
+}
+
+async function startInboundDmTypingLoop(params: {
+  account: ChannelAccountConfig;
+  event: DmInboxEvent;
+  logger?: { warn: (message: string) => void };
+}): Promise<{ stop: () => Promise<void> }> {
+  let stopped = false;
+  let inFlight: Promise<void> | null = null;
+  const tick = async () => {
+    if (stopped || inFlight) {
+      return;
+    }
+    inFlight = sendInboundDmTyping(params.account, params.event)
+      .catch((error) => {
+        params.logger?.warn(`telegram-user-bridge DM typing failed: ${String(error)}`);
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+    await inFlight;
+  };
+
+  await tick();
+  const timer = setInterval(() => {
+    void tick();
+  }, 4000);
+
+  return {
+    stop: async () => {
+      stopped = true;
+      clearInterval(timer);
+      if (inFlight) {
+        await inFlight;
+      }
+    },
+  };
+}
+
 async function deliverInboundDmReply(
   account: ChannelAccountConfig,
   senderId: string | number,
@@ -781,19 +849,34 @@ async function processInboundDmEvent(params: {
       params.api.logger?.warn(`telegram-user-bridge session meta update failed: ${String(error)}`);
     },
   });
-  await (core.reply.dispatchReplyWithBufferedBlockDispatcher as (...args: unknown[]) => Promise<void>)({
-    ctx: ctxPayload,
-    cfg: params.cfg,
-    dispatcherOptions: {
-      deliver: async (payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] }) => {
-        await deliverInboundDmReply(params.account, senderId, payload);
+  let typingHandle: { stop: () => Promise<void> } | null = null;
+  try {
+    if (params.account.markReadOnInbound) {
+      await markInboundDmRead(params.account, params.event);
+    }
+    if (params.account.typingWhileReplying) {
+      typingHandle = await startInboundDmTypingLoop({
+        account: params.account,
+        event: params.event,
+        logger: params.api.logger,
+      });
+    }
+    await (core.reply.dispatchReplyWithBufferedBlockDispatcher as (...args: unknown[]) => Promise<void>)({
+      ctx: ctxPayload,
+      cfg: params.cfg,
+      dispatcherOptions: {
+        deliver: async (payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] }) => {
+          await deliverInboundDmReply(params.account, senderId, payload);
+        },
+        onError: (error: unknown) => {
+          params.api.logger?.warn(`telegram-user-bridge DM reply failed: ${String(error)}`);
+        },
       },
-      onError: (error: unknown) => {
-        params.api.logger?.warn(`telegram-user-bridge DM reply failed: ${String(error)}`);
-      },
-    },
-    replyOptions: {},
-  });
+      replyOptions: {},
+    });
+  } finally {
+    await typingHandle?.stop();
+  }
   return "processed";
 }
 
@@ -930,6 +1013,8 @@ function registerDmChannel(api: PluginApi): void {
           pollTimeoutMs: account.pollTimeoutMs,
           pollIntervalMs: account.pollIntervalMs,
           strictPeerBindings: account.strictPeerBindings,
+          markReadOnInbound: account.markReadOnInbound,
+          typingWhileReplying: account.typingWhileReplying,
           policyProfile: account.policyProfile ?? null,
           allowFrom: account.allowFrom ?? [],
           writeTo: account.writeTo ?? [],
