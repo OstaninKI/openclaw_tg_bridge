@@ -771,7 +771,12 @@ async function processInboundDmEvent(params: {
     sessionKey,
     ctx: ctxPayload,
     createIfMissing: true,
-    updateLastRoute: true,
+    updateLastRoute: {
+      sessionKey,
+      channel: CHANNEL_ID,
+      to: normalizedTarget,
+      accountId: route.accountId,
+    },
     onRecordError: (error: unknown) => {
       params.api.logger?.warn(`telegram-user-bridge session meta update failed: ${String(error)}`);
     },

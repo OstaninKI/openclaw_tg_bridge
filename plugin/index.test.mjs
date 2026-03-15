@@ -600,6 +600,163 @@ test("DM gateway startAccount works with channelRuntime and explicit stopAccount
   assert.match(JSON.stringify(statuses), /stopped/);
 });
 
+test("DM gateway records structured last route and acknowledges processed inbound events", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            strictPeerBindings: true,
+            allowFrom: ["123456789"],
+            writeTo: ["123456789"],
+          },
+        },
+      },
+    },
+    bindings: [
+      {
+        agentId: "owner-agent",
+        match: {
+          channel: "telegram-user-bridge",
+          accountId: "default",
+          peer: { kind: "direct", id: "123456789" },
+        },
+      },
+    ],
+  });
+  register(api);
+
+  const account = api.channels[0].config.resolveAccount(api.config, "default");
+  const abortController = new AbortController();
+  const statuses = [];
+  let recordArgs = null;
+  let sendPayload = null;
+  let ackPayload = null;
+  let acked = null;
+  const ackedPromise = new Promise((resolve) => {
+    acked = resolve;
+  });
+  const event = {
+    id: 42,
+    text: "hello from telegram",
+    sender_id: "123456789",
+    sender_name: "Alice",
+    sender_username: "alice",
+    date: "2026-03-14T10:00:00+00:00",
+  };
+  let pollCount = 0;
+
+  globalThis.fetch = async (url, init) => {
+    const normalizedUrl = String(url);
+    if (normalizedUrl.includes("/dm/inbox/poll")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({ events: pollCount === 1 ? [event] : [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/send_message")) {
+      sendPayload = JSON.parse(init.body);
+      return new Response(JSON.stringify({ ok: true, message_id: 999 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (normalizedUrl.includes("/dm/inbox/ack")) {
+      ackPayload = JSON.parse(init.body);
+      abortController.abort();
+      acked();
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${normalizedUrl}`);
+  };
+
+  const channelRuntime = {
+    reply: {
+      resolveEnvelopeFormatOptions() {
+        return {};
+      },
+      formatAgentEnvelope({ body }) {
+        return body;
+      },
+      finalizeInboundContext(ctx) {
+        return ctx;
+      },
+      async dispatchReplyWithBufferedBlockDispatcher({ dispatcherOptions }) {
+        await dispatcherOptions.deliver({ text: "reply from agent" });
+      },
+    },
+    routing: {
+      resolveAgentRoute() {
+        throw new Error("resolveAgentRoute should not be used when strict bindings are enabled");
+      },
+      buildAgentSessionKey() {
+        return "dm-session-key";
+      },
+    },
+    session: {
+      resolveStorePath() {
+        return "/tmp/test";
+      },
+      readSessionUpdatedAt() {
+        return 0;
+      },
+      async recordInboundSession(args) {
+        recordArgs = args;
+        args.updateLastRoute.channel.trim();
+        args.updateLastRoute.to.trim();
+      },
+    },
+  };
+
+  let handle = null;
+  try {
+    handle = await api.channels[0].gateway.startAccount({
+      account,
+      cfg: api.config,
+      channelRuntime,
+      abortSignal: abortController.signal,
+      getStatus() {
+        return statuses.at(-1) ?? null;
+      },
+      setStatus(value) {
+        statuses.push(value);
+      },
+    });
+
+    await Promise.race([
+      ackedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timed out waiting for inbound DM ack")), 500)),
+    ]);
+  } finally {
+    if (handle) {
+      await handle.stop();
+    }
+  }
+
+  assert.deepEqual(recordArgs.updateLastRoute, {
+    sessionKey: "dm-session-key",
+    channel: "telegram-user-bridge",
+    to: "telegram-user-bridge:123456789",
+    accountId: "default",
+  });
+  assert.deepEqual(sendPayload, {
+    peer: "123456789",
+    text: "reply from agent",
+    reply_to: null,
+  });
+  assert.deepEqual(ackPayload, {
+    sender_id: "123456789",
+    sender_username: "alice",
+    message_id: 42,
+  });
+  assert.match(JSON.stringify(statuses), /polling/);
+});
+
 test("strict DM binding resolves exact sender to agent", () => {
   const route = __test.resolveConfiguredDmBinding(
     {
