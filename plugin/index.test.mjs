@@ -2270,6 +2270,94 @@ test("strict DM channel startup fails fast when allowFrom and bindings diverge",
   );
 });
 
+test("strict DM validation fails when bound agent allowlist excludes telegram tools", () => {
+  const errors = __test.validateStrictDmAccountConfig(
+    {
+      agents: {
+        list: [
+          {
+            id: "owner-agent",
+            tools: {
+              profile: "coding",
+              allow: ["read", "write", "exec"],
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "owner-agent",
+          match: {
+            channel: "telegram-user-bridge",
+            accountId: "default",
+            peer: { kind: "direct", id: "123456789" },
+          },
+        },
+      ],
+    },
+    {
+      accountId: "default",
+      defaultAccountId: "default",
+      enabled: true,
+      label: "Telegram User DM",
+      baseUrl: "http://127.0.0.1:8765",
+      strictPeerBindings: true,
+      timeoutMs: 30000,
+      pollTimeoutMs: 25000,
+      pollIntervalMs: 1500,
+      allowFrom: ["123456789"],
+      writeTo: ["123456789"],
+    },
+    ["telegram_owner_dm", "telegram_owner"]
+  );
+
+  assert.match(errors.join("\n"), /tools\.allow excludes telegram-user-bridge tools/);
+});
+
+test("strict DM validation accepts bound agent allowlist with telegram tools", () => {
+  const errors = __test.validateStrictDmAccountConfig(
+    {
+      agents: {
+        list: [
+          {
+            id: "owner-agent",
+            tools: {
+              profile: "coding",
+              allow: ["telegram_owner_dm_send_message", "read"],
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "owner-agent",
+          match: {
+            channel: "telegram-user-bridge",
+            accountId: "default",
+            peer: { kind: "direct", id: "123456789" },
+          },
+        },
+      ],
+    },
+    {
+      accountId: "default",
+      defaultAccountId: "default",
+      enabled: true,
+      label: "Telegram User DM",
+      baseUrl: "http://127.0.0.1:8765",
+      strictPeerBindings: true,
+      timeoutMs: 30000,
+      pollTimeoutMs: 25000,
+      pollIntervalMs: 1500,
+      allowFrom: ["123456789"],
+      writeTo: ["123456789"],
+    },
+    ["telegram_owner_dm", "telegram_owner"]
+  );
+
+  assert.equal(errors.length, 0);
+});
+
 test("ack helper retries transient failures and eventually succeeds", async () => {
   const calls = [];
   globalThis.fetch = async (url, init) => {

@@ -125,6 +125,19 @@ function resolveOwnerCompatAliasSlug(profile: ProfileConfig, existingSlugs: Set<
   return null;
 }
 
+function collectProfileToolPrefixes(profiles: ProfileConfig[]): string[] {
+  const slugs = new Set(profiles.map((profile) => slugifyToolId(profile.id)));
+  const prefixes = new Set<string>();
+  for (const profile of profiles) {
+    prefixes.add(`telegram_${slugifyToolId(profile.id)}`);
+    const ownerCompatAlias = resolveOwnerCompatAliasSlug(profile, slugs);
+    if (ownerCompatAlias) {
+      prefixes.add(`telegram_${ownerCompatAlias}`);
+    }
+  }
+  return Array.from(prefixes);
+}
+
 function isOwnerProfile(profile: ProfileConfig): boolean {
   return /^owner(?:$|[_-])/i.test(profile.id.trim());
 }
@@ -650,7 +663,11 @@ function collectRelevantDirectBindings(
   return relevant;
 }
 
-function validateStrictDmAccountConfig(cfg: Record<string, unknown>, account: ChannelAccountConfig): string[] {
+function validateStrictDmAccountConfig(
+  cfg: Record<string, unknown>,
+  account: ChannelAccountConfig,
+  expectedToolPrefixes: string[]
+): string[] {
   if (!account.strictPeerBindings) {
     return [];
   }
@@ -715,6 +732,42 @@ function validateStrictDmAccountConfig(cfg: Record<string, unknown>, account: Ch
     if (!allowIds.has(peerId)) {
       errors.push(`account "${account.accountId}": binding exists for sender ${peerId} but allowFrom does not include it`);
     }
+  }
+
+  // Strict DM routing assumes dedicated agents; if an explicit allowlist exists but excludes
+  // telegram_* tools, OpenClaw falls back to core tools in-session, which breaks owner actions.
+  const configuredAgents = ((cfg.agents as Record<string, unknown> | undefined)?.list ?? []) as Array<unknown>;
+  const byAgentId = new Map<string, Record<string, unknown>>();
+  for (const rawAgent of configuredAgents) {
+    if (!rawAgent || typeof rawAgent !== "object") continue;
+    const agent = rawAgent as Record<string, unknown>;
+    const agentId = typeof agent.id === "string" ? agent.id.trim() : "";
+    if (!agentId) continue;
+    byAgentId.set(agentId, agent);
+  }
+
+  const uniqueBoundAgents = new Set(Array.from(bindingByPeer.values()));
+  for (const agentId of uniqueBoundAgents) {
+    const agent = byAgentId.get(agentId);
+    if (!agent) continue;
+    const tools = (agent.tools as Record<string, unknown> | undefined) ?? undefined;
+    if (!tools || !Object.prototype.hasOwnProperty.call(tools, "allow")) continue;
+    const allowRaw = tools.allow;
+    if (!Array.isArray(allowRaw)) continue;
+    const allow = allowRaw
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim());
+    const hasTelegramTool = allow.some((toolName) =>
+      expectedToolPrefixes.some((prefix) => toolName === prefix || toolName.startsWith(`${prefix}_`))
+    );
+    if (hasTelegramTool) continue;
+    const expected = expectedToolPrefixes
+      .slice(0, 3)
+      .map((prefix) => `${prefix}_...`)
+      .join(", ");
+    errors.push(
+      `account "${account.accountId}": agent "${agentId}" tools.allow excludes telegram-user-bridge tools (${expected}); inbound DM sessions will expose only core tools`
+    );
   }
 
   return errors;
@@ -1247,7 +1300,11 @@ function registerDmChannel(api: PluginApi): void {
     },
     gateway: {
       startAccount: async (ctx: GatewayStartContext) => {
-        const validationErrors = validateStrictDmAccountConfig(ctx.cfg, ctx.account);
+        const validationErrors = validateStrictDmAccountConfig(
+          ctx.cfg,
+          ctx.account,
+          collectProfileToolPrefixes(pluginConfig.profiles)
+        );
         if (validationErrors.length > 0) {
           throw new Error(`telegram-user-bridge configuration error:\n- ${validationErrors.join("\n- ")}`);
         }
