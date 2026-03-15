@@ -57,11 +57,13 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   register(api);
 
   assert.ok(getTool(api, "telegram_owner_send_message"));
+  assert.ok(getTool(api, "telegram_owner_dm_send_message"));
   assert.ok(getTool(api, "telegram_owner_send_file"));
   assert.ok(getTool(api, "telegram_owner_list_dialog_folders"));
   assert.ok(getTool(api, "telegram_owner_upsert_dialog_folder"));
   assert.ok(getTool(api, "telegram_owner_delete_dialog_folder"));
   assert.ok(getTool(api, "telegram_owner_join_chat_by_link"));
+  assert.ok(getTool(api, "telegram_owner_dm_join_chat_by_link"));
   assert.ok(getTool(api, "telegram_owner_send_location"));
   assert.ok(getTool(api, "telegram_owner_edit_message"));
   assert.ok(getTool(api, "telegram_owner_delete_message"));
@@ -99,6 +101,51 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   assert.equal(capturedInit.headers["X-OpenClaw-Allow-From"], "@durov,-1001");
   assert.equal(capturedInit.headers["X-OpenClaw-Write-To"], "me");
   assert.match(result.content[0].text, /Message sent/);
+});
+
+test("owner_dm profile also registers owner compatibility aliases", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "owner_dm", label: "Owner", mode: "interactive", privilegedTools: true }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  assert.ok(getTool(api, "telegram_owner_dm_send_message"));
+  assert.ok(getTool(api, "telegram_owner_send_message"));
+  assert.ok(getTool(api, "telegram_owner_dm_join_chat_by_link"));
+  assert.ok(getTool(api, "telegram_owner_join_chat_by_link"));
+  assert.ok(getTool(api, "telegram_owner_dm_list_dialog_folders"));
+  assert.ok(getTool(api, "telegram_owner_list_dialog_folders"));
+});
+
+test("no owner compatibility aliases are added when both owner and owner_dm profiles exist", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [
+              { id: "owner", label: "Owner", mode: "interactive", privilegedTools: true },
+              { id: "owner_dm", label: "OwnerDM", mode: "interactive", privilegedTools: true },
+            ],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  const ownerSendCount = api.tools.filter((tool) => tool.name === "telegram_owner_send_message").length;
+  const ownerDmSendCount = api.tools.filter((tool) => tool.name === "telegram_owner_dm_send_message").length;
+  assert.equal(ownerSendCount, 1);
+  assert.equal(ownerDmSendCount, 1);
 });
 
 test("plugin sends file via backend endpoint", async () => {

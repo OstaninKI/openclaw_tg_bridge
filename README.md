@@ -513,6 +513,7 @@ Give each OpenClaw agent only its own tools:
 
 If agents use explicit `tools.allow`, include `telegram_owner_dm_join_chat_by_link` for the owner profile, otherwise the agent cannot self-join channels from `t.me` links.
 Dialog-folder management tools are owner-only and are registered only for profile ids that start with `owner` (for example `owner_dm`).
+Compatibility note: if only one owner profile exists with id `owner` or `owner_dm`, the plugin also registers the alternate owner prefix as aliases (`telegram_owner_*` and `telegram_owner_dm_*`) to reduce migration mismatches between profile id and `tools.allow`.
 
 This is the main separation mechanism. One agent should never get the other agent's DM tool set.
 

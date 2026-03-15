@@ -117,6 +117,14 @@ function slugifyToolId(value: string): string {
   return slug || "profile";
 }
 
+function resolveOwnerCompatAliasSlug(profile: ProfileConfig, existingSlugs: Set<string>): string | null {
+  if (!isOwnerProfile(profile)) return null;
+  const primary = slugifyToolId(profile.id);
+  if (primary === "owner" && !existingSlugs.has("owner_dm")) return "owner_dm";
+  if (primary === "owner_dm" && !existingSlugs.has("owner")) return "owner";
+  return null;
+}
+
 function isOwnerProfile(profile: ProfileConfig): boolean {
   return /^owner(?:$|[_-])/i.test(profile.id.trim());
 }
@@ -1283,9 +1291,8 @@ function registerDmChannel(api: PluginApi): void {
   api.registerChannel({ plugin });
 }
 
-function registerProfileTools(api: PluginApi, profile: ProfileConfig): void {
-  const slug = slugifyToolId(profile.id);
-  const prefix = `telegram_${slug}`;
+function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOverride?: string): void {
+  const prefix = prefixOverride ?? `telegram_${slugifyToolId(profile.id)}`;
   const profileLabel = profile.label;
   const optional = { optional: true };
   const isSourcesReadOnly = profile.mode === "sources_ro";
@@ -2811,7 +2818,19 @@ export const __test = {
 export default function register(api: PluginApi) {
   const config = getConfig(api);
   registerDmChannel(api);
+  const profileSlugs = new Set(config.profiles.map((profile) => slugifyToolId(profile.id)));
+  const registeredPrefixes = new Set<string>();
+  const registerPrefix = (profile: ProfileConfig, prefix: string): void => {
+    if (registeredPrefixes.has(prefix)) return;
+    registerProfileTools(api, profile, prefix);
+    registeredPrefixes.add(prefix);
+  };
   for (const profile of config.profiles) {
-    registerProfileTools(api, profile);
+    const primaryPrefix = `telegram_${slugifyToolId(profile.id)}`;
+    registerPrefix(profile, primaryPrefix);
+    const ownerCompatAlias = resolveOwnerCompatAliasSlug(profile, profileSlugs);
+    if (ownerCompatAlias) {
+      registerPrefix(profile, `telegram_${ownerCompatAlias}`);
+    }
   }
 }
