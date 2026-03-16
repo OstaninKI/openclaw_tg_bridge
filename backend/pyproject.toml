@@ -13,6 +13,7 @@ dependencies = [
     "fastapi>=0.115.0,<1",
     "uvicorn[standard]>=0.30.0,<1",
     "pydantic>=2.0,<3",
+    "qrcode[pil]>=7.4",
 ]
 
 [project.scripts]

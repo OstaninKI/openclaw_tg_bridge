@@ -47,6 +47,15 @@ The same Telegram account may be exposed to multiple OpenClaw contexts, for exam
 
 Examples of context ids: `owner_dm`, `trusted_dm`, `trusted_alice_dm`, `sources_ro`.
 
+## Re-authenticating the bridge (session revoked)
+
+If any Telegram tool returns a bridge-unavailable error, check `GET /health` on the bridge endpoint (no auth required).
+
+- `{"connected": true}` — bridge is healthy; the error was transient.
+- `{"connected": false, "needs_reauth": true}` — the Telegram session was revoked. The bridge is running but cannot make Telegram calls. Use the `telegram-user-bridge-setup` skill to re-authenticate via QR code.
+
+Do not keep retrying Telegram tools when the bridge reports `needs_reauth`. Switch to the setup skill's re-auth flow and resume normal operation after `connected` returns `true`.
+
 ## Managing additional trusted DM users
 
 OpenClaw may manage additional trusted DM users by editing configuration, but only inside the `trusted*_dm` surface. The existing owner baseline must stay untouched unless the user explicitly asks to change it.

@@ -141,7 +141,9 @@ To make routing deterministic as well, add exact OpenClaw `bindings` by Telegram
 
 ### 2. Create the Telegram session locally
 
-Run locally, not on the VPS:
+Run locally, not on the VPS. Two auth methods are available.
+
+#### Method A — phone + code (default)
 
 Fast path from the repository root:
 
@@ -175,6 +177,30 @@ source .venv/bin/activate
 pip install -e .
 python -m openclaw_tg_bridge auth --print-session-string
 ```
+
+#### Method B — QR code (preferred when running inside OpenClaw web chat)
+
+Start a one-shot local HTTP server that serves the QR code over `localhost`:
+
+```bash
+TELEGRAM_API_ID=12345 TELEGRAM_API_HASH=your_api_hash \
+sh ./create_telethon_session.sh ~/.openclaw/telethon/openclaw_user.session \
+  --use-qr --listen 127.0.0.1:8767
+```
+
+Once the server is running:
+
+1. `GET http://127.0.0.1:8767/qr` → returns `{state, qr_url, qr_png_b64, qr_ascii, expires_at}`.
+   - Decode `qr_png_b64` from base64 and display as an inline image in the chat.
+   - Also show `qr_ascii` in a code block as a terminal fallback.
+2. Tell the user: "Open Telegram → Settings → Devices → Link Desktop Device and scan this QR code."
+3. Poll `GET http://127.0.0.1:8767/status` every 3 seconds.
+   - If `state == "awaiting_password"`: ask the user for their 2FA password, then `POST http://127.0.0.1:8767/password` with body `{"password": "<user input>"}`. Continue polling.
+   - If `state == "done"`: the session file is saved and the process exits automatically. Proceed with the next install step.
+   - If `state == "error"`: report `error` from the status response and offer to retry or fall back to Method A.
+4. QR codes expire after ~25 s. If the current QR expires the server auto-regenerates it. Fetch `/qr` again and show the new image.
+
+No Telegram session is needed to start the HTTP server — it is a standalone process that runs only during auth.
 
 You can deploy either:
 
@@ -754,8 +780,26 @@ Recommended minimal manual checks after deployment:
 Useful live checks:
 
 - `curl http://127.0.0.1:8765/health` should return `{"status":"ok","connected":true}` in the healthy state;
-- if Telegram connectivity is down, the same endpoint should return HTTP `503` with `connected:false`;
+- if Telegram connectivity is temporarily down, the endpoint returns HTTP `503` with `{"connected":false}`;
+- if the Telegram session was revoked (logged out from another device), the endpoint returns HTTP `503` with `{"connected":false,"needs_reauth":true}`. In this case use the re-auth flow described below — do not restart the service;
 - `systemctl status openclaw-tg-bridge` should show automatic restarts after a crash if you use the bundled unit file.
+
+## Re-authenticating a running bridge (session revoked)
+
+If `GET /health` returns `{"connected":false,"needs_reauth":true}`, the Telegram session was revoked (e.g. the account was logged out from another device). The bridge continues running in a limited mode — all tool calls return `503` with `needs_reauth: true` in the body.
+
+Re-authenticate without restarting the service:
+
+1. `POST /auth/qr/start` (Authorization: Bearer `<TELEGRAM_BRIDGE_API_TOKEN>`) — starts a background QR login task.
+2. `GET /auth/qr` — returns `{state, qr_url, qr_png_b64, qr_ascii, expires_at}`. Decode and show the PNG inline; show `qr_ascii` as a code-block fallback.
+3. Tell the user: "Open Telegram → Settings → Devices → Link Desktop Device and scan this QR code."
+4. Poll `GET /auth/qr/status` every 3 seconds.
+   - `state == "awaiting_password"` → ask for 2FA, then `POST /auth/qr/2fa {"password":"..."}`, continue polling.
+   - `state == "done"` → bridge is live again. Verify with `GET /health` returning `connected: true`.
+   - `state == "error"` → report `error` from the status body and offer to retry (`POST /auth/qr/start` again).
+5. If the QR expires before scanning, the backend auto-regenerates it. Fetch `/auth/qr` again.
+
+All `/auth/qr/*` endpoints require the same `TELEGRAM_BRIDGE_API_TOKEN` Bearer token as regular bridge endpoints.
 
 ## Backend configuration
 

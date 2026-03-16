@@ -44,6 +44,11 @@ _dm_cursor_store: DmCursorStore | None = None
 _dm_broker: "DmInboxBroker | None" = None
 _resolved_peer_cache: "ResolvedPeerCache | None" = None
 _process_lock: ProcessLock | None = None
+
+# QR re-auth state (active when session was not authorized at startup or was revoked)
+_needs_reauth: bool = False
+_qr_auth_ctx: "Any | None" = None  # QrAuthContext, typed as Any to avoid circular import
+_qr_auth_task: "asyncio.Task | None" = None
 NON_DOWNLOADABLE_DM_MEDIA_TYPES = frozenset(
     {
         "MessageMediaContact",
@@ -263,9 +268,48 @@ async def _create_client() -> BridgeClient:
     )
 
 
+async def _on_new_dm(event: Any) -> None:
+    """Inbound DM event handler.  Reads module globals so it stays valid after re-auth."""
+    bridge = _bridge
+    broker = _dm_broker
+    if bridge is None or broker is None:
+        return
+    if not getattr(event, "is_private", False):
+        return
+    message = getattr(event, "message", None)
+    if message is None or getattr(message, "out", False):
+        return
+    sender = getattr(message, "sender", None)
+    if sender is None:
+        for resolver_name in ("get_sender",):
+            resolver = getattr(message, resolver_name, None) or getattr(event, resolver_name, None)
+            if not callable(resolver):
+                continue
+            try:
+                resolved = resolver()
+                sender = await resolved if hasattr(resolved, "__await__") else resolved
+            except Exception:
+                logger.debug("Unable to resolve sender for inbound DM", exc_info=True)
+                sender = None
+            if sender is not None:
+                break
+    payload = _serialize_message(message, entity=sender or getattr(event, "chat", None))
+    payload["chat_type"] = "direct"
+    if payload.get("chat_title") is None:
+        payload["chat_title"] = payload.get("sender_name")
+    observed_entity = sender or getattr(event, "chat", None)
+    if observed_entity is not None:
+        bridge.observe_peer_entity(
+            observed_entity,
+            peer=payload.get("sender_id"),
+            extra_keys=[payload.get("sender_username")],
+        )
+    await broker.push(payload)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _bridge, _config, _policy_store, _sources_store, _dm_cursor_store, _dm_broker, _resolved_peer_cache, _process_lock
+    global _bridge, _config, _policy_store, _sources_store, _dm_cursor_store, _dm_broker, _resolved_peer_cache, _process_lock, _needs_reauth
     from telethon import events
 
     _config = load_config()
@@ -277,48 +321,28 @@ async def lifespan(app: FastAPI):
     _dm_broker = DmInboxBroker()
     _resolved_peer_cache = ResolvedPeerCache()
     try:
-        _bridge = await _create_client()
-
-        async def _on_new_dm(event: Any) -> None:
-            if not getattr(event, "is_private", False):
-                return
-            message = getattr(event, "message", None)
-            if message is None or getattr(message, "out", False):
-                return
-            sender = getattr(message, "sender", None)
-            if sender is None:
-                for resolver_name in ("get_sender",):
-                    resolver = getattr(message, resolver_name, None) or getattr(event, resolver_name, None)
-                    if not callable(resolver):
-                        continue
-                    try:
-                        resolved = resolver()
-                        sender = await resolved if hasattr(resolved, "__await__") else resolved
-                    except Exception:
-                        logger.debug("Unable to resolve sender for inbound DM", exc_info=True)
-                        sender = None
-                    if sender is not None:
-                        break
-            payload = _serialize_message(message, entity=sender or getattr(event, "chat", None))
-            payload["chat_type"] = "direct"
-            if payload.get("chat_title") is None:
-                payload["chat_title"] = payload.get("sender_name")
-            observed_entity = sender or getattr(event, "chat", None)
-            if observed_entity is not None:
-                _bridge.observe_peer_entity(
-                    observed_entity,
-                    peer=payload.get("sender_id"),
-                    extra_keys=[payload.get("sender_username")],
+        try:
+            _bridge = await _create_client()
+        except ValueError as exc:
+            if "not authorized" in str(exc).lower():
+                logger.warning(
+                    "Session is not authorized; bridge starting in needs_reauth mode. "
+                    "Use POST /auth/qr/start (with API token) to authenticate via QR code."
                 )
-            await get_dm_broker().push(payload)
+                _needs_reauth = True
+            else:
+                raise
 
-        _bridge.client.add_event_handler(_on_new_dm, events.NewMessage(incoming=True))
-        logger.info("Bridge client connected")
+        if _bridge is not None:
+            _bridge.client.add_event_handler(_on_new_dm, events.NewMessage(incoming=True))
+            logger.info("Bridge client connected")
+
         yield
     finally:
         if _bridge:
             await _bridge.disconnect()
             _bridge = None
+        _needs_reauth = False
         _config = None
         _policy_store = None
         _sources_store = None
@@ -331,6 +355,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="OpenClaw Telegram Bridge", lifespan=lifespan)
+
+
+@app.exception_handler(RuntimeError)
+async def _bridge_not_ready_handler(request: Request, exc: RuntimeError):
+    """Return 503 (instead of 500) when the bridge is not yet initialised."""
+    if "not initialized" in str(exc).lower():
+        body: dict = {"detail": "Bridge is not ready; check /health for status"}
+        if _needs_reauth:
+            body["needs_reauth"] = True
+        return JSONResponse(status_code=503, content=body)
+    raise exc
 
 
 def _check_auth(request: Request, api_token: str | None) -> None:
@@ -1902,10 +1937,172 @@ async def sync_sources(request: Request, body: SyncSourcesBody):
 @app.get("/health")
 async def health():
     """Liveness: 200 if process is up. Does not require auth."""
-    bridge = get_bridge()
+    if _needs_reauth:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "needs_reauth", "connected": False, "needs_reauth": True},
+        )
+    if _bridge is None:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "initializing", "connected": False},
+        )
     try:
-        if await bridge.ensure_connected():
+        if await _bridge.ensure_connected():
             return {"status": "ok", "connected": True}
         return JSONResponse(status_code=503, content={"status": "disconnected", "connected": False})
     except Exception:
         return JSONResponse(status_code=503, content={"status": "error", "connected": False})
+
+
+# ---------------------------------------------------------------------------
+# QR re-auth endpoints (require API token; only meaningful when needs_reauth)
+# ---------------------------------------------------------------------------
+
+async def _server_qr_flow(ctx: Any) -> None:
+    """Background task: runs QR login and, on success, brings the bridge back online."""
+    global _bridge, _needs_reauth
+
+    from telethon import TelegramClient, events as telethon_events  # type: ignore[import-untyped]
+    from telethon.sessions import StringSession  # type: ignore[import-untyped]
+
+    from openclaw_tg_bridge.auth_qr import QrState, run_qr_login_flow
+
+    cfg = get_config()
+    api_id = cfg["api_id"]
+    api_hash = cfg["api_hash"]
+
+    session_string = cfg.get("session_string")
+    if session_string:
+        session: Any = StringSession(session_string)
+    else:
+        path = resolve_session_path(cfg.get("session_path"))
+        if not path:
+            ctx.state = QrState.ERROR
+            ctx.error = "No session path or string configured"
+            ctx._done_event.set()
+            return
+        session = str(path.with_suffix(""))
+
+    proxy = cfg.get("proxy")
+    if proxy and proxy[0] == "mtproxy":
+        from telethon import connection  # type: ignore[import-untyped]
+
+        client = TelegramClient(
+            session,
+            api_id,
+            api_hash,
+            connection=connection.ConnectionTcpMTProxyRandomizedIntermediate,
+            proxy=(proxy[1], proxy[2], proxy[3]),
+        )
+    else:
+        client = TelegramClient(session, api_id, api_hash, proxy=proxy if proxy else None)
+    client.flood_sleep_threshold = 0
+
+    try:
+        await client.connect()
+        await run_qr_login_flow(client, ctx)
+    except Exception as exc:
+        if ctx.state != QrState.ERROR:
+            ctx.state = QrState.ERROR
+            ctx.error = str(exc)
+            ctx._done_event.set()
+        await client.disconnect()
+        return
+
+    if ctx.state != QrState.DONE:
+        await client.disconnect()
+        return
+
+    # Rebuild BridgeClient from the now-authorised Telethon client.
+    try:
+        new_bridge = BridgeClient(
+            client,
+            reply_delay_sec=cfg["reply_delay_sec"],
+            reply_delay_max_sec=cfg.get("reply_delay_max_sec"),
+            allow_chat_ids=cfg["allow_chat_ids"] or None,
+            deny_chat_ids=cfg["deny_chat_ids"] or None,
+            write_allow_chat_ids=cfg["write_allow_chat_ids"] or None,
+            write_deny_chat_ids=cfg["write_deny_chat_ids"] or None,
+            rpc_timeout_sec=cfg["rpc_timeout_sec"],
+            flood_wait_max_sleep_sec=cfg["flood_wait_max_sleep_sec"],
+        )
+        client.add_event_handler(_on_new_dm, telethon_events.NewMessage(incoming=True))
+        _bridge = new_bridge
+        _needs_reauth = False
+        logger.info("QR re-auth successful; bridge is now connected.")
+    except Exception as exc:
+        ctx.state = QrState.ERROR
+        ctx.error = f"Bridge creation failed after QR auth: {exc}"
+        await client.disconnect()
+
+
+class _QrPasswordBody(BaseModel):
+    password: str = Field(..., min_length=1)
+
+
+@app.post("/auth/qr/start")
+async def auth_qr_start():
+    """Start (or restart) a QR login process.  Only available when needs_reauth is true."""
+    global _qr_auth_ctx, _qr_auth_task
+
+    from openclaw_tg_bridge.auth_qr import QrAuthContext
+
+    if not _needs_reauth and _bridge is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Bridge is already connected; re-auth is not needed.",
+        )
+
+    # Cancel any in-progress QR auth task.
+    if _qr_auth_task and not _qr_auth_task.done():
+        _qr_auth_task.cancel()
+        try:
+            await _qr_auth_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    _qr_auth_ctx = QrAuthContext()
+    _qr_auth_task = asyncio.create_task(_server_qr_flow(_qr_auth_ctx))
+    return {"status": "started"}
+
+
+@app.get("/auth/qr")
+async def auth_qr_get():
+    """Return the current QR code (PNG base64, ASCII art, URL) and expiry."""
+    if _qr_auth_ctx is None:
+        raise HTTPException(status_code=404, detail="No QR auth in progress. Call POST /auth/qr/start first.")
+    return {
+        "state": _qr_auth_ctx.state,
+        "qr_url": _qr_auth_ctx.qr_url,
+        "qr_png_b64": _qr_auth_ctx.qr_png_b64,
+        "qr_ascii": _qr_auth_ctx.qr_ascii,
+        "expires_at": _qr_auth_ctx.qr_expires_at,
+    }
+
+
+@app.get("/auth/qr/status")
+async def auth_qr_status():
+    """Poll current QR auth state."""
+    if _qr_auth_ctx is None:
+        return {"state": "idle", "error": None}
+    return {"state": _qr_auth_ctx.state, "error": _qr_auth_ctx.error}
+
+
+@app.post("/auth/qr/2fa")
+async def auth_qr_2fa(body: _QrPasswordBody):
+    """Submit the 2FA password after the QR has been scanned."""
+    from openclaw_tg_bridge.auth_qr import QrState
+
+    if _qr_auth_ctx is None:
+        raise HTTPException(status_code=404, detail="No QR auth in progress.")
+    if _qr_auth_ctx.state != QrState.AWAITING_PASSWORD:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Not awaiting 2FA password; current state: {_qr_auth_ctx.state}",
+        )
+    try:
+        _qr_auth_ctx._password_queue.put_nowait(body.password)
+    except asyncio.QueueFull:
+        raise HTTPException(status_code=409, detail="Password already submitted; wait for current attempt.")
+    return {"status": "accepted"}

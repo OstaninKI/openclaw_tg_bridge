@@ -72,6 +72,7 @@ type BridgeResponse = {
   error?: string;
   status?: number;
   retryAfter?: number;
+  needsReauth?: boolean;
 };
 
 type DmInboxEvent = {
@@ -374,11 +375,18 @@ async function fetchBridgeWithConfig(
           : res.statusText;
       const retryAfterHeader = res.headers.get("retry-after");
       const retryAfter = retryAfterHeader ? Number(retryAfterHeader) : undefined;
+      const needsReauth =
+        res.status === 503 &&
+        typeof data === "object" &&
+        data !== null &&
+        "needs_reauth" in data &&
+        (data as { needs_reauth: unknown }).needs_reauth === true;
       return {
         ok: false,
         error: detail || `HTTP ${res.status}`,
         status: res.status,
         retryAfter: Number.isFinite(retryAfter) ? retryAfter : undefined,
+        needsReauth: needsReauth || undefined,
       };
     }
 
@@ -429,11 +437,13 @@ function formatBridgeError(res: BridgeResponse): string {
     }
     return BRIDGE_UNAVAILABLE;
   }
-  if (
-    res.status === 503 ||
-    detail === "Request failed" ||
-    detail === "Request timed out"
-  ) {
+  if (res.status === 503) {
+    if (res.needsReauth) {
+      return "Telegram session was revoked. Use the telegram-user-bridge-setup skill to re-authenticate via QR code (POST /auth/qr/start).";
+    }
+    return BRIDGE_UNAVAILABLE;
+  }
+  if (detail === "Request failed" || detail === "Request timed out") {
     return BRIDGE_UNAVAILABLE;
   }
   return detail || BRIDGE_UNAVAILABLE;
