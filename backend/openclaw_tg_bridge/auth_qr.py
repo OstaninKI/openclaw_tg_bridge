@@ -133,7 +133,10 @@ async def run_qr_login_flow(client: Any, ctx: QrAuthContext) -> None:
     is set.  On failure, ``ctx.state`` is ``ERROR`` and the exception is
     re-raised.
     """
-    from telethon.errors import SessionPasswordNeededError  # type: ignore[import-untyped]
+    from telethon.errors import (  # type: ignore[import-untyped]
+        PasswordHashInvalidError,
+        SessionPasswordNeededError,
+    )
 
     try:
         qr_login = await client.qr_login()
@@ -152,10 +155,17 @@ async def run_qr_login_flow(client: Any, ctx: QrAuthContext) -> None:
                 await qr_login.recreate()
                 _refresh_qr(ctx, qr_login)
             except SessionPasswordNeededError:
-                # QR was scanned but account has 2FA.
+                # QR was scanned but account has 2FA – retry until correct.
                 ctx.state = QrState.AWAITING_PASSWORD
-                password = await ctx._password_queue.get()
-                await client.sign_in(password=password)
+                while True:
+                    password = await ctx._password_queue.get()
+                    try:
+                        await client.sign_in(password=password)
+                        break
+                    except PasswordHashInvalidError:
+                        ctx.error = "Incorrect 2FA password, please try again"
+                        # state stays AWAITING_PASSWORD; queue is now empty
+                ctx.error = None
                 ctx.state = QrState.DONE
                 ctx._done_event.set()
                 return
@@ -192,8 +202,10 @@ async def _standalone_serve(ctx: QrAuthContext, host: str, port: int) -> None:
     async def get_status():
         return {"state": ctx.state, "error": ctx.error}
 
+    from pydantic import Field as _Field
+
     class _PasswordBody(BaseModel):
-        password: str
+        password: str = _Field(..., min_length=1)
 
     @mini_app.post("/password")
     async def post_password(body: _PasswordBody):

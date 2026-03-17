@@ -2807,3 +2807,31 @@ test("buildInboundDmBody does NOT include transcription hint when can_transcribe
   const body = __test.buildInboundDmBody(event);
   assert.doesNotMatch(body, /Telegram transcription available/);
 });
+
+// ---------------------------------------------------------------------------
+// needsReauth parsing + formatBridgeError
+// ---------------------------------------------------------------------------
+
+test("formatBridgeError returns reauth message for 503 with needsReauth=true", () => {
+  const res = {
+    ok: false,
+    status: 503,
+    error: "Bridge is not ready",
+    needsReauth: true,
+  };
+  const msg = __test.formatBridgeError(res);
+  assert.match(msg, /session was revoked/i);
+  assert.match(msg, /QR/i);
+});
+
+test("formatBridgeError returns generic unavailable for 503 without needsReauth", () => {
+  const res = {
+    ok: false,
+    status: 503,
+    error: "Bridge is not ready",
+    needsReauth: undefined,
+  };
+  const msg = __test.formatBridgeError(res);
+  assert.doesNotMatch(msg, /session was revoked/i);
+  assert.match(msg, /unavailable/i);
+});

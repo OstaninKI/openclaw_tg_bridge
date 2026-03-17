@@ -64,9 +64,13 @@ NON_DOWNLOADABLE_DM_MEDIA_TYPES = frozenset(
 )
 
 
+class _BridgeNotReadyError(RuntimeError):
+    """Raised by get_bridge() when _bridge is None."""
+
+
 def get_bridge() -> BridgeClient:
     if _bridge is None:
-        raise RuntimeError("Bridge not initialized")
+        raise _BridgeNotReadyError("Bridge not initialized")
     return _bridge
 
 
@@ -358,15 +362,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OpenClaw Telegram Bridge", lifespan=lifespan)
 
 
-@app.exception_handler(RuntimeError)
-async def _bridge_not_ready_handler(request: Request, exc: RuntimeError):
+@app.exception_handler(_BridgeNotReadyError)
+async def _bridge_not_ready_handler(request: Request, exc: _BridgeNotReadyError):
     """Return 503 (instead of 500) when the bridge is not yet initialised."""
-    if "not initialized" in str(exc).lower():
-        body: dict = {"detail": "Bridge is not ready; check /health for status"}
-        if _needs_reauth:
-            body["needs_reauth"] = True
-        return JSONResponse(status_code=503, content=body)
-    raise exc
+    body: dict = {"detail": "Bridge is not ready; check /health for status"}
+    if _needs_reauth:
+        body["needs_reauth"] = True
+    return JSONResponse(status_code=503, content=body)
 
 
 def _check_auth(request: Request, api_token: str | None) -> None:
@@ -2024,23 +2026,15 @@ async def _server_qr_flow(ctx: Any) -> None:
         client = TelegramClient(session, api_id, api_hash, proxy=proxy if proxy else None)
     client.flood_sleep_threshold = 0
 
+    client_handed_off = False
     try:
         await client.connect()
         await run_qr_login_flow(client, ctx)
-    except Exception as exc:
-        if ctx.state != QrState.ERROR:
-            ctx.state = QrState.ERROR
-            ctx.error = str(exc)
-            ctx._done_event.set()
-        await client.disconnect()
-        return
 
-    if ctx.state != QrState.DONE:
-        await client.disconnect()
-        return
+        if ctx.state != QrState.DONE:
+            return
 
-    # Rebuild BridgeClient from the now-authorised Telethon client.
-    try:
+        # Rebuild BridgeClient from the now-authorised Telethon client.
         new_bridge = BridgeClient(
             client,
             reply_delay_sec=cfg["reply_delay_sec"],
@@ -2055,12 +2049,17 @@ async def _server_qr_flow(ctx: Any) -> None:
         client.add_event_handler(_on_new_dm, telethon_events.NewMessage(incoming=True))
         _bridge = new_bridge
         _needs_reauth = False
+        client_handed_off = True
         await new_bridge.refresh_premium()
         logger.info("QR re-auth successful; bridge is now connected.")
     except Exception as exc:
-        ctx.state = QrState.ERROR
-        ctx.error = f"Bridge creation failed after QR auth: {exc}"
-        await client.disconnect()
+        if ctx.state != QrState.ERROR:
+            ctx.state = QrState.ERROR
+            ctx.error = str(exc)
+            ctx._done_event.set()
+    finally:
+        if not client_handed_off:
+            await client.disconnect()
 
 
 class _QrPasswordBody(BaseModel):

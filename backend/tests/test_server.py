@@ -355,5 +355,98 @@ class TestServerSourceDiscovery(unittest.IsolatedAsyncioTestCase):
         bridge.download_media_for_inbox.assert_not_awaited()
 
 
+try:
+    from openclaw_tg_bridge.server import (
+        _BridgeNotReadyError,
+        _QrPasswordBody,
+        auth_qr_2fa,
+        auth_qr_get,
+        auth_qr_start,
+        health,
+    )
+    from openclaw_tg_bridge.auth_qr import QrAuthContext, QrState
+    _qr_imports_ok = True
+except (ModuleNotFoundError, ImportError):
+    _BridgeNotReadyError = None
+    _QrPasswordBody = None
+    auth_qr_2fa = None
+    auth_qr_get = None
+    auth_qr_start = None
+    health = None
+    QrAuthContext = None
+    QrState = None
+    _qr_imports_ok = False
+
+
+@unittest.skipIf(not _qr_imports_ok, "fastapi or auth_qr not available")
+class TestHealthEndpoint(unittest.IsolatedAsyncioTestCase):
+    async def test_health_needs_reauth(self):
+        with patch("openclaw_tg_bridge.server._needs_reauth", True), \
+             patch("openclaw_tg_bridge.server._bridge", None):
+            resp = await health()
+        self.assertEqual(resp.status_code, 503)
+        import json
+        body = json.loads(resp.body)
+        self.assertEqual(body["status"], "needs_reauth")
+        self.assertTrue(body["needs_reauth"])
+
+    async def test_health_initializing(self):
+        with patch("openclaw_tg_bridge.server._needs_reauth", False), \
+             patch("openclaw_tg_bridge.server._bridge", None):
+            resp = await health()
+        self.assertEqual(resp.status_code, 503)
+        import json
+        body = json.loads(resp.body)
+        self.assertEqual(body["status"], "initializing")
+
+    async def test_health_ok(self):
+        bridge = AsyncMock()
+        bridge.ensure_connected = AsyncMock(return_value=True)
+        with patch("openclaw_tg_bridge.server._needs_reauth", False), \
+             patch("openclaw_tg_bridge.server._bridge", bridge):
+            resp = await health()
+        # Returns dict (200), not JSONResponse
+        self.assertEqual(resp["status"], "ok")
+        self.assertTrue(resp["connected"])
+
+
+@unittest.skipIf(not _qr_imports_ok, "fastapi or auth_qr not available")
+class TestQrEndpoints(unittest.IsolatedAsyncioTestCase):
+    async def test_auth_qr_start_bridge_alive_raises_409(self):
+        bridge = AsyncMock()
+        with patch("openclaw_tg_bridge.server._needs_reauth", False), \
+             patch("openclaw_tg_bridge.server._bridge", bridge), \
+             patch("openclaw_tg_bridge.server._qr_auth_task", None):
+            with self.assertRaises(HTTPException) as cm:
+                await auth_qr_start()
+            self.assertEqual(cm.exception.status_code, 409)
+
+    async def test_auth_qr_get_no_context_returns_404(self):
+        with patch("openclaw_tg_bridge.server._qr_auth_ctx", None):
+            with self.assertRaises(HTTPException) as cm:
+                await auth_qr_get()
+            self.assertEqual(cm.exception.status_code, 404)
+
+    async def test_auth_qr_2fa_wrong_state_raises_409(self):
+        ctx = QrAuthContext()
+        ctx.state = QrState.AWAITING_SCAN  # not AWAITING_PASSWORD
+        body = _QrPasswordBody(password="pw")
+        with patch("openclaw_tg_bridge.server._qr_auth_ctx", ctx):
+            with self.assertRaises(HTTPException) as cm:
+                await auth_qr_2fa(body)
+            self.assertEqual(cm.exception.status_code, 409)
+
+    async def test_auth_qr_2fa_double_submit_raises_409(self):
+        ctx = QrAuthContext()
+        ctx.state = QrState.AWAITING_PASSWORD
+        # Fill the queue so next put_nowait raises QueueFull
+        ctx._password_queue.put_nowait("first")
+        body = _QrPasswordBody(password="second")
+        with patch("openclaw_tg_bridge.server._qr_auth_ctx", ctx):
+            with self.assertRaises(HTTPException) as cm:
+                await auth_qr_2fa(body)
+            self.assertEqual(cm.exception.status_code, 409)
+
+
 if __name__ == "__main__":
     unittest.main()

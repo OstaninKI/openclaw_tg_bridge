@@ -2973,6 +2973,7 @@ export const __test = {
   ackInboundDmEvent,
   buildInboundDmBody,
   collectRelevantDirectBindings,
+  formatBridgeError,
   normalizePeerKey,
   nextPollBackoffMs,
   startInboundDmTypingLoop,
