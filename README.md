@@ -11,6 +11,30 @@ This repository is designed for a setup like this:
 - **writes denied by default** until you explicitly allow them;
 - automatic discovery of new source chats for `sources_ro`, so joining a new channel/group does not require manual config edits.
 
+> **OpenClaw agent installing this bridge?** → See [OPENCLAW.md](./OPENCLAW.md) for the compact self-install guide (config snippets, install sequence, editing rules). Load that file instead of this one.
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [What is implemented](#what-is-implemented)
+- [DM isolation model](#dm-isolation-model)
+- [Quick start](#quick-start)
+  - [1. Get Telegram API credentials](#1-get-telegram-api-credentials)
+  - [2. Create the Telegram session locally](#2-create-the-telegram-session-locally)
+  - [3. Run the backend on the VPS](#3-run-the-backend-on-the-vps)
+  - [4. Create the backend policy file](#4-create-the-backend-policy-file)
+  - [5. Configure the plugin](#5-configure-the-plugin)
+  - [6. Configure the inbound DM channel](#6-configure-the-inbound-dm-channel)
+  - [7. Bind tools to separate agents](#7-bind-tools-to-separate-agents)
+- [OpenClaw self-install playbook](#openclaw-self-install-playbook)
+- [Scheduling and token economy](#scheduling-and-token-economy)
+- [Manual smoke checklist](#manual-smoke-checklist)
+- [Re-authenticating a running bridge](#re-authenticating-a-running-bridge-session-revoked)
+- [Backend configuration](#backend-configuration)
+- [Plugin configuration](#plugin-configuration)
+- [Safety model](#safety-model)
+- [Compliance with Telegram ToS](#compliance-with-telegram-tos)
+
 ## Architecture
 
 - **Backend** (Python): one long-running Telethon client using one Telegram session; enforces all read/write policy decisions and keeps a source inventory.
@@ -26,6 +50,9 @@ The isolation boundary is **not** the Telegram account. It is the combination of
 3. backend-enforced read/write scopes per context profile.
 
 ## What is implemented
+
+<details>
+<summary>Full feature list</summary>
 
 - Multiple isolated policy profiles on top of one Telegram session.
 - Separate **read** and **write** scopes per profile.
@@ -114,6 +141,8 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - OpenClaw channel polling endpoint `/dm/inbox/poll`
   - acknowledged cursors in `dm_inbox_state.json`
   - direct replies back to the same Telegram sender
+
+</details>
 
 ## DM isolation model
 
@@ -561,7 +590,8 @@ For each additional sender, add:
 
 The channel implementation already supports this model. You do not need extra bridge instances or extra Telegram sessions.
 
-### Copy-paste pattern for more trusted DM users
+<details>
+<summary>Copy-paste pattern: adding more trusted DM users</summary>
 
 If you want OpenClaw to add more trusted DM users itself, use one dedicated `trusted_<alias>_dm` profile per person and leave the existing owner baseline untouched unless you explicitly ask to change it.
 
@@ -679,9 +709,16 @@ Operational rule for OpenClaw self-management:
 - it may add, update, or remove only `trusted*_dm` entries by default;
 - it must not rename, remove, or rebind the existing owner DM baseline unless you explicitly ask for that change.
 
+</details>
+
 ## OpenClaw self-install playbook
 
-If OpenClaw is running in this repository workspace, it can install and configure the bridge with very little manual help. The preferred instruction source for that flow is the workspace skill [skills/telegram-user-bridge-setup/SKILL.md](./skills/telegram-user-bridge-setup/SKILL.md).
+See **[OPENCLAW.md](./OPENCLAW.md)** for the compact machine-readable guide: install sequence, all config snippets, editing rules, and re-auth flow in one file.
+
+For a detailed step-by-step skill with QR auth and config merge logic, see [skills/telegram-user-bridge-setup/SKILL.md](./skills/telegram-user-bridge-setup/SKILL.md).
+
+<details>
+<summary>Sequence summary &amp; editing boundaries</summary>
 
 Minimal user interaction should be only:
 
@@ -707,6 +744,8 @@ Editing boundaries for OpenClaw:
 - it should preserve unrelated OpenClaw config;
 - it should keep `strictPeerBindings: true` and `session.dmScope = "per-channel-peer"` for the multi-user DM model;
 - it should treat `owner_dm` as protected baseline and extend only `trusted*_dm` by default.
+
+</details>
 
 ## Scheduling and token economy
 
@@ -759,6 +798,9 @@ Example forum-wide digest pattern:
 
 Operational rule: checkpoints belong to OpenClaw, not to the bridge. The bridge only returns deltas and topic metadata.
 
+<details>
+<summary>Manual smoke checklist &amp; re-auth flow</summary>
+
 ## Manual smoke checklist
 
 Automated tests cover backend/plugin logic, but live Telegram permissions and RPC behavior still need a manual smoke pass on a real account.
@@ -801,9 +843,12 @@ Re-authenticate without restarting the service:
 
 All `/auth/qr/*` endpoints require the same `TELEGRAM_BRIDGE_API_TOKEN` Bearer token as regular bridge endpoints.
 
+</details>
+
 ## Backend configuration
 
-Environment variables:
+<details>
+<summary>Environment variables</summary>
 
 | Variable | Description |
 |---|---|
@@ -829,6 +874,8 @@ Environment variables:
 | `TELEGRAM_BRIDGE_API_TOKEN` | Optional bearer token for plugin/backend auth |
 | `TELEGRAM_RPC_TIMEOUT_SEC` | Telegram RPC timeout per request |
 | `TELEGRAM_FLOOD_WAIT_MAX_SLEEP_SEC` | Retry once only for short flood waits up to this threshold |
+
+</details>
 
 ## Plugin configuration
 
