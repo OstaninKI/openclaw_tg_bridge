@@ -335,6 +335,7 @@ async def lifespan(app: FastAPI):
 
         if _bridge is not None:
             _bridge.client.add_event_handler(_on_new_dm, events.NewMessage(incoming=True))
+            await _bridge.refresh_premium()
             logger.info("Bridge client connected")
 
         yield
@@ -395,7 +396,7 @@ async def auth_middleware(request: Request, call_next):
 
 class SendMessageBody(BaseModel):
     peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
-    text: str = Field(..., min_length=1, max_length=4096)
+    text: str = Field(..., min_length=1, max_length=100_000)
     reply_to: int | None = None
 
 
@@ -445,6 +446,11 @@ class SendVoiceBody(BaseModel):
     peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
     file_path: str = Field(..., min_length=1)
     caption: str | None = None
+
+
+class TranscribeVoiceBody(BaseModel):
+    peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
+    message_id: int = Field(..., ge=1)
 
 
 class SendStickerBody(BaseModel):
@@ -918,6 +924,25 @@ async def send_voice(request: Request, body: SendVoiceBody):
         raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
     except Exception:
         logger.exception("send_voice failed")
+        raise HTTPException(status_code=502, detail="Request failed")
+
+
+@app.post("/transcribe_voice")
+async def transcribe_voice(request: Request, body: TranscribeVoiceBody):
+    bridge = get_bridge()
+    try:
+        overrides = await resolve_request_policy(request)
+        return await bridge.transcribe_voice(
+            body.peer,
+            body.message_id,
+            policy_overrides=overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers) from exc
+    except Exception:
+        logger.exception("transcribe_voice failed")
         raise HTTPException(status_code=502, detail="Request failed")
 
 
@@ -2030,6 +2055,7 @@ async def _server_qr_flow(ctx: Any) -> None:
         client.add_event_handler(_on_new_dm, telethon_events.NewMessage(incoming=True))
         _bridge = new_bridge
         _needs_reauth = False
+        await new_bridge.refresh_premium()
         logger.info("QR re-auth successful; bridge is now connected.")
     except Exception as exc:
         ctx.state = QrState.ERROR

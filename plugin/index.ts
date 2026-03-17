@@ -101,6 +101,7 @@ type DmInboxEvent = {
   contact_user_id?: string | number | null;
   contact_vcard?: string | null;
   entities?: Array<{ type?: string; text?: string; url?: string }>;
+  can_transcribe?: boolean | null;
 };
 
 function toolResult(text: string): ToolContent {
@@ -567,6 +568,9 @@ function buildInboundDmBody(event: DmInboxEvent): string {
       if (preview) {
         hints.push(`[Telegram media files | paths:${preview}${moreSuffix}]`);
       }
+    }
+    if (event.can_transcribe === true) {
+      hints.push(`[Telegram transcription available | use: transcribe_voice | id:${event.id}]`);
     }
   }
   const hasLatitude = typeof event.latitude === "number" && Number.isFinite(event.latitude);
@@ -1139,6 +1143,7 @@ async function processInboundDmEvent(params: {
         : undefined,
     ContactVCard: params.event.contact_vcard ?? undefined,
     MessageEntities: Array.isArray(params.event.entities) ? params.event.entities : undefined,
+    CanTranscribe: params.event.can_transcribe === true ? true : undefined,
     CommandAuthorized: true,
     Provider: CHANNEL_ID,
     Surface: CHANNEL_ID,
@@ -1439,7 +1444,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           peer: Type.Union([Type.String(), Type.Number()], {
             description: "Username (@name), chat id, or 'me'",
           }),
-          text: Type.String({ minLength: 1, maxLength: 4096, description: "Message text" }),
+          text: Type.String({ minLength: 1, description: "Message text. Messages longer than 4096 chars are auto-split at logical boundaries (paragraph → sentence → word) up to 20 parts (~82K chars total). Larger texts must be trimmed or chunked manually before calling this tool." }),
           reply_to: Type.Optional(Type.Number({ description: "Message id to reply to" })),
         }),
         async execute(_id: string, params: { peer: string | number; text: string; reply_to?: number }) {
@@ -1539,7 +1544,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             description: "Username (@name), chat id, or 'me'",
           }),
           message_id: Type.Number({ minimum: 1 }),
-          text: Type.String({ minLength: 1, maxLength: 4096 }),
+          text: Type.String({ minLength: 1 }),
         }),
         async execute(_id: string, params: { peer: string | number; message_id: number; text: string }) {
           const res = await fetchBridge(api, profile, "/edit_message", {
@@ -1658,6 +1663,38 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             });
             if (!res.ok) return toolResult(formatBridgeError(res));
             return toolResult("Voice note sent.");
+          },
+        },
+        optional
+      );
+    }
+
+    if (allowPrivilegedTools) {
+      api.registerTool(
+        {
+          name: `${prefix}_transcribe_voice`,
+          description:
+            `Transcribe a voice note or video circle using Telegram's built-in speech recognition (Premium feature) ` +
+            `via the "${profileLabel}" context. ` +
+            "If the account does not have Telegram Premium, returns an error — in that case use download_media to get the audio file and process it with available STT tools.",
+          parameters: Type.Object({
+            peer: Type.Union([Type.String(), Type.Number()], { description: "Username (@name), chat id, or 'me'" }),
+            message_id: Type.Number({ minimum: 1, description: "ID of the voice note or video circle message" }),
+          }),
+          async execute(_id: string, params: { peer: string | number; message_id: number }) {
+            const res = await fetchBridge(api, profile, "/transcribe_voice", {
+              method: "POST",
+              body: JSON.stringify({ peer: params.peer, message_id: params.message_id }),
+            });
+            if (!res.ok) return toolResult(formatBridgeError(res));
+            const data = res.data as { ok?: boolean; text?: string; error?: string } | undefined;
+            if (data?.ok === false || data?.error) {
+              return toolResult(
+                "Transcription unavailable (Telegram Premium required). Use download_media to retrieve the audio file for external STT processing."
+              );
+            }
+            const text = typeof data?.text === "string" ? data.text : "";
+            return toolResult(text ? `Transcription: ${text}` : "Transcription returned empty text.");
           },
         },
         optional
@@ -2934,6 +2971,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
 
 export const __test = {
   ackInboundDmEvent,
+  buildInboundDmBody,
   collectRelevantDirectBindings,
   normalizePeerKey,
   nextPollBackoffMs,

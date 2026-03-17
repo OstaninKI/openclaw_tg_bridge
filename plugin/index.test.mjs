@@ -2671,3 +2671,139 @@ test("poll backoff helper doubles delay and caps it", () => {
   assert.equal(__test.nextPollBackoffMs(3000, 1500), 6000);
   assert.equal(__test.nextPollBackoffMs(20000, 1500), 30000);
 });
+
+// ── transcribe_voice tool ──────────────────────────────────────────────────
+
+test("transcribe_voice tool is registered for privileged profiles", () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "owner", label: "Owner", privilegedTools: true }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+  assert.ok(getTool(api, "telegram_owner_transcribe_voice"));
+});
+
+test("transcribe_voice tool is NOT registered for non-privileged profiles", () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "trusted", label: "Trusted", mode: "interactive" }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+  assert.equal(getTool(api, "telegram_trusted_transcribe_voice"), undefined);
+});
+
+test("transcribe_voice tool calls /transcribe_voice endpoint", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "owner", label: "Owner", privilegedTools: true }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  let capturedUrl = "";
+  let capturedBody = undefined;
+  globalThis.fetch = async (url, init) => {
+    capturedUrl = url;
+    capturedBody = JSON.parse(init.body);
+    return new Response(JSON.stringify({ ok: true, text: "hello world" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const tool = getTool(api, "telegram_owner_transcribe_voice");
+  const result = await tool.execute("1", { peer: "me", message_id: 42 });
+
+  assert.equal(capturedUrl, "http://127.0.0.1:8765/transcribe_voice");
+  assert.equal(capturedBody.peer, "me");
+  assert.equal(capturedBody.message_id, 42);
+  assert.match(result.content[0].text, /Transcription: hello world/);
+});
+
+test("transcribe_voice tool returns fallback hint when transcription unavailable", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "owner", label: "Owner", privilegedTools: true }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ ok: false, error: "transcription_unavailable" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  const tool = getTool(api, "telegram_owner_transcribe_voice");
+  const result = await tool.execute("1", { peer: "me", message_id: 42 });
+
+  assert.match(result.content[0].text, /download_media/);
+});
+
+// ── can_transcribe hint in buildInboundDmBody ──────────────────────────────
+
+test("buildInboundDmBody includes transcription hint when can_transcribe is true", () => {
+  const event = {
+    id: 99,
+    text: "voice message",
+    sender_id: "123",
+    has_media: true,
+    media_type: "MessageMediaDocument",
+    can_transcribe: true,
+  };
+  const body = __test.buildInboundDmBody(event);
+  assert.match(body, /Telegram transcription available/);
+  assert.match(body, /transcribe_voice/);
+  assert.match(body, /id:99/);
+});
+
+test("buildInboundDmBody does NOT include transcription hint when can_transcribe is false", () => {
+  const event = {
+    id: 99,
+    text: "voice message",
+    sender_id: "123",
+    has_media: true,
+    media_type: "MessageMediaDocument",
+    can_transcribe: false,
+  };
+  const body = __test.buildInboundDmBody(event);
+  assert.doesNotMatch(body, /Telegram transcription available/);
+});
+
+test("buildInboundDmBody does NOT include transcription hint when can_transcribe is absent", () => {
+  const event = {
+    id: 99,
+    text: "voice message",
+    sender_id: "123",
+    has_media: true,
+    media_type: "MessageMediaDocument",
+  };
+  const body = __test.buildInboundDmBody(event);
+  assert.doesNotMatch(body, /Telegram transcription available/);
+});

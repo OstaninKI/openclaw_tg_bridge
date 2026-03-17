@@ -11,7 +11,12 @@ from openclaw_tg_bridge.client import (
     BridgeForbiddenError,
     BridgeRateLimitError,
     BridgeValidationError,
+    MAX_SEND_CHUNKS,
+    _extract_media_summary,
+    _is_video_note,
+    _is_voice_note,
     _normalize_peer,
+    _split_text,
     build_policy,
 )
 
@@ -1192,6 +1197,276 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(BridgeValidationError, "channels and supergroups"):
             await bridge.get_recent_actions("42", limit=10)
+
+
+class TestSplitText(unittest.TestCase):
+    def test_short_text_returned_as_single_chunk(self) -> None:
+        result = _split_text("hello", 100)
+        self.assertEqual(result, ["hello"])
+
+    def test_text_exactly_at_limit_not_split(self) -> None:
+        text = "x" * 4096
+        result = _split_text(text, 4096)
+        self.assertEqual(result, [text])
+
+    def test_splits_at_double_newline(self) -> None:
+        text = "para one\n\n" + "x" * 10
+        result = _split_text(text, 15)
+        self.assertEqual(len(result), 2)
+        self.assertTrue(result[0].endswith("\n\n") or result[0] == "para one\n\n")
+
+    def test_splits_at_sentence_boundary(self) -> None:
+        text = "First sentence. " + "x" * 10
+        result = _split_text(text, 20)
+        self.assertEqual(len(result), 2)
+        self.assertIn("First sentence. ", result[0])
+
+    def test_splits_at_word_boundary(self) -> None:
+        text = "hello world " + "x" * 10
+        result = _split_text(text, 14)
+        # should not split mid-word
+        for chunk in result:
+            self.assertFalse(chunk.startswith(" ") and chunk != " ")
+
+    def test_hard_cut_when_no_break_point(self) -> None:
+        text = "x" * 20
+        result = _split_text(text, 10)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], "x" * 10)
+        self.assertEqual(result[1], "x" * 10)
+
+    def test_all_chunks_fit_within_limit(self) -> None:
+        text = "word " * 200  # 1000 chars
+        result = _split_text(text, 100)
+        for chunk in result:
+            self.assertLessEqual(len(chunk), 100)
+
+    def test_joined_chunks_equal_original(self) -> None:
+        text = "First. Second. Third. " + "x" * 50
+        result = _split_text(text, 20)
+        self.assertEqual("".join(result), text)
+
+
+class _FakeDocumentAttributeAudio:
+    def __init__(self, *, voice: bool = False) -> None:
+        self.voice = voice
+
+
+class _FakeDocumentAttributeVideo:
+    def __init__(self, *, round_message: bool = False) -> None:
+        self.round_message = round_message
+
+
+class _FakeDocumentAttributeFilename:
+    pass
+
+
+def _make_fake_types_ns() -> object:
+    return SimpleNamespace(
+        DocumentAttributeAudio=_FakeDocumentAttributeAudio,
+        DocumentAttributeVideo=_FakeDocumentAttributeVideo,
+    )
+
+
+class TestMediaSummaryPremium(unittest.TestCase):
+    def _make_voice_message(self) -> object:
+        attr = _FakeDocumentAttributeAudio(voice=True)
+        document = SimpleNamespace(attributes=[attr])
+        media = SimpleNamespace(document=document)
+        return SimpleNamespace(media=media, file=None)
+
+    def _make_video_note_message(self) -> object:
+        attr = _FakeDocumentAttributeVideo(round_message=True)
+        document = SimpleNamespace(attributes=[attr])
+        media = SimpleNamespace(document=document)
+        return SimpleNamespace(media=media, file=None)
+
+    def _make_regular_message(self) -> object:
+        attr = _FakeDocumentAttributeFilename()
+        media = SimpleNamespace(document=SimpleNamespace(attributes=[attr]))
+        return SimpleNamespace(media=media, file=None)
+
+    def test_is_voice_note_detects_audio_voice_attr(self) -> None:
+        msg = self._make_voice_message()
+        with patch("openclaw_tg_bridge.client._telethon_types", return_value=_make_fake_types_ns()):
+            self.assertTrue(_is_voice_note(msg))
+
+    def test_is_voice_note_returns_false_for_regular_doc(self) -> None:
+        msg = self._make_regular_message()
+        with patch("openclaw_tg_bridge.client._telethon_types", return_value=_make_fake_types_ns()):
+            self.assertFalse(_is_voice_note(msg))
+
+    def test_is_video_note_detects_round_message_attr(self) -> None:
+        msg = self._make_video_note_message()
+        with patch("openclaw_tg_bridge.client._telethon_types", return_value=_make_fake_types_ns()):
+            self.assertTrue(_is_video_note(msg))
+
+    def test_extract_media_summary_adds_can_transcribe_for_voice_with_premium(self) -> None:
+        msg = self._make_voice_message()
+        with patch("openclaw_tg_bridge.client._telethon_types", return_value=_make_fake_types_ns()):
+            summary = _extract_media_summary(msg, premium=True)
+        self.assertTrue(summary.get("can_transcribe"))
+
+    def test_extract_media_summary_can_transcribe_false_when_no_premium(self) -> None:
+        msg = self._make_voice_message()
+        with patch("openclaw_tg_bridge.client._telethon_types", return_value=_make_fake_types_ns()):
+            summary = _extract_media_summary(msg, premium=False)
+        self.assertFalse(summary.get("can_transcribe"))
+
+    def test_extract_media_summary_no_can_transcribe_when_premium_unknown(self) -> None:
+        msg = self._make_voice_message()
+        with patch("openclaw_tg_bridge.client._telethon_types", return_value=_make_fake_types_ns()):
+            summary = _extract_media_summary(msg, premium=None)
+        self.assertNotIn("can_transcribe", summary)
+
+    def test_extract_media_summary_no_can_transcribe_for_regular_media(self) -> None:
+        msg = self._make_regular_message()
+        with patch("openclaw_tg_bridge.client._telethon_types", return_value=_make_fake_types_ns()):
+            summary = _extract_media_summary(msg, premium=True)
+        self.assertNotIn("can_transcribe", summary)
+
+
+class TestSendMessageSplit(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.mock_tg = MagicMock()
+        self.mock_tg.is_connected = MagicMock(return_value=True)
+        self.mock_tg.__call__ = AsyncMock()
+        self.mock_tg.connect = AsyncMock()
+        self.mock_tg.get_entity = AsyncMock()
+        self.mock_tg.send_message = AsyncMock()
+
+    def create_bridge(self) -> BridgeClient:
+        return BridgeClient(
+            self.mock_tg,
+            reply_delay_sec=0,
+            write_allow_chat_ids=["me"],
+            rpc_timeout_sec=5,
+            flood_wait_max_sleep_sec=0,
+        )
+
+    async def test_short_message_returns_single_message_id(self) -> None:
+        bridge = self.create_bridge()
+        self.mock_tg.get_entity.return_value = SimpleNamespace(id=1, username="me")
+        self.mock_tg.send_message.return_value = SimpleNamespace(id=42)
+
+        with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()):
+            result = await bridge.send_message("me", "hello")
+
+        self.assertEqual(result["message_id"], 42)
+        self.assertNotIn("message_ids", result)
+        self.mock_tg.send_message.assert_awaited_once()
+
+    async def test_long_message_is_split_and_returns_message_ids(self) -> None:
+        bridge = self.create_bridge()
+        self.mock_tg.get_entity.return_value = SimpleNamespace(id=1, username="me")
+        self.mock_tg.send_message.side_effect = [SimpleNamespace(id=1), SimpleNamespace(id=2)]
+
+        long_text = "word " * 1000  # ~5000 chars, > 4096
+        with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()):
+            result = await bridge.send_message("me", long_text)
+
+        self.assertIn("message_ids", result)
+        self.assertEqual(result["message_id"], result["message_ids"][0])
+        self.assertGreater(len(result["message_ids"]), 1)
+        self.assertEqual(self.mock_tg.send_message.await_count, len(result["message_ids"]))
+
+    async def test_reply_to_only_on_first_chunk(self) -> None:
+        bridge = self.create_bridge()
+        self.mock_tg.get_entity.return_value = SimpleNamespace(id=1, username="me")
+        self.mock_tg.send_message.side_effect = [SimpleNamespace(id=10), SimpleNamespace(id=11)]
+
+        long_text = "word " * 1000
+        with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()):
+            await bridge.send_message("me", long_text, reply_to=99)
+
+        calls = self.mock_tg.send_message.await_args_list
+        self.assertEqual(calls[0].kwargs.get("reply_to"), 99)
+        self.assertIsNone(calls[1].kwargs.get("reply_to"))
+
+    async def test_too_many_chunks_raises_validation_error(self) -> None:
+        bridge = self.create_bridge()
+        # (MAX_SEND_CHUNKS + 1) * 4096 chars guaranteed to produce > MAX_SEND_CHUNKS chunks
+        oversized_text = "x" * (MAX_SEND_CHUNKS + 1) * 4096
+        with self.assertRaisesRegex(BridgeValidationError, "chunks"):
+            await bridge.send_message("me", oversized_text)
+
+
+class TestTranscribeVoice(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.mock_tg = AsyncMock()
+        self.mock_tg.is_connected = MagicMock(return_value=True)
+        self.mock_tg.get_entity = AsyncMock(return_value=SimpleNamespace(id=1, username="me"))
+
+    def create_bridge(self, is_premium: bool | None = True) -> BridgeClient:
+        bridge = BridgeClient(
+            self.mock_tg,
+            reply_delay_sec=0,
+            allow_chat_ids=None,
+            rpc_timeout_sec=5,
+            flood_wait_max_sleep_sec=0,
+        )
+        bridge._is_premium = is_premium
+        return bridge
+
+    async def test_returns_fallback_immediately_when_not_premium(self) -> None:
+        bridge = self.create_bridge(is_premium=False)
+        result = await bridge.transcribe_voice("me", 42)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "transcription_unavailable")
+        self.mock_tg.assert_not_awaited()
+
+    async def test_rejects_invalid_message_id(self) -> None:
+        bridge = self.create_bridge(is_premium=True)
+        with self.assertRaisesRegex(BridgeValidationError, "message_id"):
+            await bridge.transcribe_voice("me", 0)
+
+    async def test_returns_transcription_text_on_success(self) -> None:
+        bridge = self.create_bridge(is_premium=True)
+        self.mock_tg.return_value = SimpleNamespace(pending=False, text="hello world")
+
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(TranscribeAudioRequest=lambda **kw: SimpleNamespace(**kw))
+        )
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            result = await bridge.transcribe_voice("me", 42)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["text"], "hello world")
+
+    async def test_polls_when_pending(self) -> None:
+        bridge = self.create_bridge(is_premium=True)
+        pending_result = SimpleNamespace(pending=True, text="")
+        done_result = SimpleNamespace(pending=False, text="transcribed")
+        self.mock_tg.side_effect = [pending_result, done_result]
+
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(TranscribeAudioRequest=lambda **kw: SimpleNamespace(**kw))
+        )
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns), \
+             patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()):
+            result = await bridge.transcribe_voice("me", 42)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["text"], "transcribed")
+        self.assertEqual(self.mock_tg.await_count, 2)
+
+    async def test_returns_fallback_on_premium_required_error(self) -> None:
+        bridge = self.create_bridge(is_premium=None)  # unknown premium status
+
+        class PremiumAccountRequiredError(Exception):
+            pass
+
+        self.mock_tg.side_effect = PremiumAccountRequiredError("PREMIUM_ACCOUNT_REQUIRED")
+
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(TranscribeAudioRequest=lambda **kw: SimpleNamespace(**kw))
+        )
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
+            result = await bridge.transcribe_voice("me", 42)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "transcription_unavailable")
+        self.assertFalse(bridge._is_premium)
 
 
 if __name__ == "__main__":

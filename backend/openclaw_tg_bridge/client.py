@@ -21,8 +21,11 @@ else:
     TelegramClient = Any
 
 MAX_MESSAGE_LENGTH = 4096
+MAX_SEND_CHUNKS = 20
 OBSERVED_PEER_CACHE_SIZE = 512
 MAX_CONTACT_VCARD_LENGTH = 512
+MAX_TRANSCRIPTION_POLL_ATTEMPTS = 3
+TRANSCRIPTION_POLL_INTERVAL_SEC = 1.5
 
 
 class BridgeError(Exception):
@@ -217,6 +220,30 @@ def _message_sender_name(message: Any, *, sender: Any | None = None) -> str | No
     return None
 
 
+def _split_text(text: str, max_len: int) -> list[str]:
+    """Split text into chunks of at most max_len chars, preferring logical break points."""
+    if len(text) <= max_len:
+        return [text]
+    # Ordered preference for break points
+    break_seqs = ["\n\n", "\n", ". ", "! ", "? ", " "]
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > max_len:
+        split_at = -1
+        for seq in break_seqs:
+            pos = remaining.rfind(seq, 0, max_len)
+            if pos > 0:
+                split_at = pos + len(seq)
+                break
+        if split_at <= 0:
+            split_at = max_len
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
 def _reaction_label(reaction: Any) -> str | None:
     if reaction is None:
         return None
@@ -252,7 +279,39 @@ def _serialize_message_entities(message: Any) -> list[dict[str, Any]]:
     return entities
 
 
-def _extract_media_summary(message: Any) -> dict[str, Any]:
+def _is_voice_note(message: Any) -> bool:
+    """Return True if the message contains a Telegram voice note."""
+    try:
+        types = _telethon_types()
+        media = getattr(message, "media", None)
+        document = getattr(media, "document", None)
+        if document is None:
+            return False
+        for attr in getattr(document, "attributes", []):
+            if isinstance(attr, types.DocumentAttributeAudio) and getattr(attr, "voice", False):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_video_note(message: Any) -> bool:
+    """Return True if the message contains a Telegram video circle (round video)."""
+    try:
+        types = _telethon_types()
+        media = getattr(message, "media", None)
+        document = getattr(media, "document", None)
+        if document is None:
+            return False
+        for attr in getattr(document, "attributes", []):
+            if isinstance(attr, types.DocumentAttributeVideo) and getattr(attr, "round_message", False):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _extract_media_summary(message: Any, *, premium: bool | None = None) -> dict[str, Any]:
     media = getattr(message, "media", None)
     file = getattr(message, "file", None)
     summary: dict[str, Any] = {
@@ -262,6 +321,8 @@ def _extract_media_summary(message: Any) -> dict[str, Any]:
         "file_size": getattr(file, "size", None),
         "file_name": getattr(file, "name", None),
     }
+    if premium is not None and (_is_voice_note(message) or _is_video_note(message)):
+        summary["can_transcribe"] = bool(premium)
     return summary
 
 
@@ -355,6 +416,7 @@ def _serialize_message(
     entity: Any | None = None,
     sender_lookup: dict[str, Any] | None = None,
     topic_id_override: int | None = None,
+    premium: bool | None = None,
 ) -> dict[str, Any]:
     sender = _resolve_message_sender(message, sender_lookup)
     chat_entity = entity or getattr(message, "chat", None) or getattr(message, "sender", None)
@@ -380,7 +442,7 @@ def _serialize_message(
         "reply_to_message_id": getattr(message, "reply_to_msg_id", None),
         "grouped_id": getattr(message, "grouped_id", None),
     }
-    payload.update(_extract_media_summary(message))
+    payload.update(_extract_media_summary(message, premium=premium))
     payload.update(_extract_geo_summary(message))
     payload.update(_extract_contact_summary(message))
     entities = _serialize_message_entities(message)
@@ -396,6 +458,7 @@ def _serialize_messages(
     sender_lookup: dict[str, Any] | None = None,
     skip_outbound: bool = False,
     topic_id_override: int | None = None,
+    premium: bool | None = None,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for message in reversed(list(messages)):
@@ -409,6 +472,7 @@ def _serialize_messages(
                 entity=entity,
                 sender_lookup=sender_lookup,
                 topic_id_override=topic_id_override,
+                premium=premium,
             )
         )
     return out
@@ -653,6 +717,7 @@ class BridgeClient:
         self._rpc_timeout_sec = max(1.0, rpc_timeout_sec)
         self._flood_wait_max_sleep_sec = max(0.0, flood_wait_max_sleep_sec)
         self._observed_peer_entities: OrderedDict[str, Any] = OrderedDict()
+        self._is_premium: bool | None = None
 
     @property
     def client(self) -> TelegramClient:
@@ -681,6 +746,16 @@ class BridgeClient:
                 logger.warning("Reconnect failed: %s", type(exc).__name__)
                 return False
         return await self._is_connected()
+
+    async def refresh_premium(self) -> bool:
+        """Fetch and cache the account's Premium status. Returns the cached value."""
+        try:
+            me = await self._client.get_me()
+            self._is_premium = bool(getattr(me, "premium", False))
+        except Exception as exc:
+            logger.warning("Failed to fetch premium status: %s", type(exc).__name__)
+            self._is_premium = False
+        return bool(self._is_premium)
 
     async def _call_telegram(
         self,
@@ -788,9 +863,13 @@ class BridgeClient:
         text = (text or "").strip()
         if not text:
             raise BridgeValidationError("Message text is empty")
-        if len(text) > MAX_MESSAGE_LENGTH:
-            raise BridgeValidationError(f"Message too long (max {MAX_MESSAGE_LENGTH} characters)")
 
+        chunks = _split_text(text, MAX_MESSAGE_LENGTH)
+        if len(chunks) > MAX_SEND_CHUNKS:
+            raise BridgeValidationError(
+                f"Message splits into {len(chunks)} chunks, which exceeds the limit of {MAX_SEND_CHUNKS}. "
+                "Reduce the message length."
+            )
         async with self._send_lock:
             entity, _ = await self._resolve_scoped_entity(
                 peer,
@@ -799,15 +878,20 @@ class BridgeClient:
             )
             await self._delay_before_write(policy)
 
-            result = await self._call_telegram(
-                self._client.send_message,
-                entity,
-                text,
-                reply_to=reply_to,
-                action="send a message",
-                allow_flood_retry=True,
-            )
-            return {"ok": True, "message_id": getattr(result, "id", None)}
+            ids: list[Any] = []
+            for chunk in chunks:
+                result = await self._call_telegram(
+                    self._client.send_message,
+                    entity,
+                    chunk,
+                    reply_to=reply_to if not ids else None,
+                    action="send a message",
+                    allow_flood_retry=True,
+                )
+                ids.append(getattr(result, "id", None))
+            if len(ids) == 1:
+                return {"ok": True, "message_id": ids[0]}
+            return {"ok": True, "message_id": ids[0], "message_ids": ids}
 
     async def mark_read(
         self,
@@ -1121,7 +1205,55 @@ class BridgeClient:
             "username": getattr(me, "username", None),
             "first_name": getattr(me, "first_name", None),
             "last_name": getattr(me, "last_name", None),
+            "premium": bool(getattr(me, "premium", False)),
         }
+
+    async def transcribe_voice(
+        self,
+        peer: str | int,
+        message_id: int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        if message_id < 1:
+            raise BridgeValidationError("message_id must be >= 1.")
+        if self._is_premium is False:
+            return {"ok": False, "error": "transcription_unavailable"}
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading",
+            scope=policy.read_scope,
+        )
+        functions = _telethon_functions()
+        request = functions.messages.TranscribeAudioRequest(peer=entity, msg_id=message_id)
+
+        async def _do_transcribe() -> Any:
+            try:
+                async with asyncio.timeout(self._rpc_timeout_sec):
+                    return await self._client(request)
+            except TimeoutError as exc:
+                raise BridgeTimeoutError() from exc
+            except Exception as exc:
+                exc_name = type(exc).__name__
+                if exc_name == "PremiumAccountRequiredError" or "PREMIUM_ACCOUNT_REQUIRED" in str(exc):
+                    self._is_premium = False
+                    return None  # sentinel for fallback
+                raise _map_telegram_error(exc, action="transcribe voice") from exc
+
+        result = await _do_transcribe()
+        if result is None:
+            return {"ok": False, "error": "transcription_unavailable"}
+        for _ in range(MAX_TRANSCRIPTION_POLL_ATTEMPTS):
+            if not getattr(result, "pending", False):
+                break
+            await asyncio.sleep(TRANSCRIPTION_POLL_INTERVAL_SEC)
+            polled = await _do_transcribe()
+            if polled is None:
+                break
+            result = polled
+        text = getattr(result, "text", None) or ""
+        return {"ok": True, "text": text}
 
     async def get_message(
         self,
@@ -1146,7 +1278,7 @@ class BridgeClient:
         )
         if message is None:
             raise BridgeValidationError("Message not found.")
-        return _serialize_message(message, entity=entity)
+        return _serialize_message(message, entity=entity, premium=self._is_premium)
 
     async def download_media(
         self,
@@ -1184,7 +1316,7 @@ class BridgeClient:
         return {
             "ok": True,
             "path": file_path,
-            "message": _serialize_message(tg_message, entity=entity),
+            "message": _serialize_message(tg_message, entity=entity, premium=self._is_premium),
         }
 
     async def download_media_for_inbox(
@@ -1251,7 +1383,7 @@ class BridgeClient:
             from_user=from_entity,
             action="search messages",
         )
-        return _serialize_messages(messages, entity=entity)
+        return _serialize_messages(messages, entity=entity, premium=self._is_premium)
 
     async def get_media_info(
         self,
@@ -2352,7 +2484,7 @@ class BridgeClient:
                 action="read pinned messages",
             )
             messages = [message for message in all_messages if getattr(message, "pinned", False)]
-        return _serialize_messages(messages, entity=entity)
+        return _serialize_messages(messages, entity=entity, premium=self._is_premium)
 
     async def send_reaction(
         self,
@@ -2581,7 +2713,7 @@ class BridgeClient:
             action="read incoming direct messages",
             **kwargs,
         )
-        return _serialize_messages(messages, entity=entity, skip_outbound=True)
+        return _serialize_messages(messages, entity=entity, skip_outbound=True, premium=self._is_premium)
 
     async def list_topics(
         self,
@@ -2687,6 +2819,7 @@ class BridgeClient:
                     entity=entity,
                     sender_lookup=_build_sender_lookup(result),
                     topic_id_override=topic_id,
+                    premium=self._is_premium,
                 )
 
             collected: list[Any] = []
@@ -2732,6 +2865,7 @@ class BridgeClient:
                 entity=entity,
                 sender_lookup=sender_lookup,
                 topic_id_override=topic_id,
+                premium=self._is_premium,
             )
 
         max_messages = min(max(1, limit), 50)
@@ -2745,7 +2879,7 @@ class BridgeClient:
                 action="read messages",
                 **kwargs,
             )
-            return _serialize_messages(messages, entity=entity)
+            return _serialize_messages(messages, entity=entity, premium=self._is_premium)
 
         collected: list[Any] = []
         offset_id = 0
@@ -2779,7 +2913,7 @@ class BridgeClient:
             if hit_older_boundary or len(collected) >= max_messages or oldest_id <= 0 or oldest_id == offset_id:
                 break
             offset_id = oldest_id
-        return _serialize_messages(collected, entity=entity)
+        return _serialize_messages(collected, entity=entity, premium=self._is_premium)
 
     async def disconnect(self) -> None:
         if await self._is_connected():

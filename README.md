@@ -69,6 +69,7 @@ The isolation boundary is **not** the Telegram account. It is the combination of
 - Richer interactive actions:
   - `send_file`
   - `send_voice`
+  - `transcribe_voice` (Telegram Premium speech recognition for voice notes and video circles)
   - `send_sticker`
   - `send_location`
   - `edit_message`
@@ -105,6 +106,7 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `remove_reaction`
   - `get_message_reactions`
   - `leave_chat`
+- Messages exceeding 4096 characters are automatically split at logical boundaries (paragraph → newline → sentence → word) and sent sequentially, up to 20 parts (~82 000 characters). The `send_message` response includes `message_ids` with all created ids in addition to `message_id` for the first one. Texts that would require more than 20 parts return a 400 validation error.
 - Message reads are returned in ascending order (`oldest -> newest`) for safer checkpoint updates.
 - Richer message metadata for summaries:
   - `sender_id`
@@ -408,6 +410,7 @@ Profiles with `"privilegedTools": true` keep that same baseline surface and addi
 - backend-host file tools:
   - `telegram_owner_dm_send_file`
   - `telegram_owner_dm_send_voice`
+  - `telegram_owner_dm_transcribe_voice`
   - `telegram_owner_dm_send_sticker`
   - `telegram_owner_dm_download_media`
 - contacts and self-account flows:
