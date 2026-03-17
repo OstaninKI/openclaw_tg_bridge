@@ -262,8 +262,6 @@ class TestServerSourceDiscovery(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             media_path = Path(temp_dir) / "1470044" / "26_photo.jpg"
-            media_path.parent.mkdir(parents=True, exist_ok=True)
-            media_path.write_bytes(b"img")
             bridge.download_media_for_inbox.return_value = str(media_path)
             with patch(
                 "openclaw_tg_bridge.server.get_config",
@@ -281,7 +279,7 @@ class TestServerSourceDiscovery(unittest.IsolatedAsyncioTestCase):
         bridge.download_media_for_inbox.assert_awaited_once_with(
             "@alloweduser",
             26,
-            output_path=str(media_path),
+            output_path=str(media_path.resolve()),
             policy_overrides={},
         )
 

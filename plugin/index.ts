@@ -102,6 +102,7 @@ type DmInboxEvent = {
   contact_vcard?: string | null;
   entities?: Array<{ type?: string; text?: string; url?: string }>;
   can_transcribe?: boolean | null;
+  reply_to_message_id?: number | null;
 };
 
 function toolResult(text: string): ToolContent {
@@ -547,6 +548,9 @@ function buildInboundDmBody(event: DmInboxEvent): string {
   const hasMedia =
     event.has_media === true || Boolean(event.media_type) || Boolean(event.file_name) || mediaPaths.length > 0;
   const hints: string[] = [];
+  if (typeof event.reply_to_message_id === "number" && event.reply_to_message_id > 0) {
+    hints.push(`[Reply to message | id:${event.reply_to_message_id}]`);
+  }
   if (hasMedia) {
     const mediaType = sanitizeInboundHintValue(event.media_type ?? "unknown") ?? "unknown";
     const fileName = sanitizeInboundHintValue(event.file_name);
@@ -1148,6 +1152,10 @@ async function processInboundDmEvent(params: {
     Provider: CHANNEL_ID,
     Surface: CHANNEL_ID,
     MessageSid: String(params.event.id),
+    ReplyToMessageId:
+      typeof params.event.reply_to_message_id === "number" && params.event.reply_to_message_id > 0
+        ? params.event.reply_to_message_id
+        : undefined,
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: normalizedTarget,
   });
@@ -1669,37 +1677,35 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
       );
     }
 
-    if (allowPrivilegedTools) {
-      api.registerTool(
-        {
-          name: `${prefix}_transcribe_voice`,
-          description:
-            `Transcribe a voice note or video circle using Telegram's built-in speech recognition (Premium feature) ` +
-            `via the "${profileLabel}" context. ` +
-            "If the account does not have Telegram Premium, returns an error — in that case use download_media to get the audio file and process it with available STT tools.",
-          parameters: Type.Object({
-            peer: Type.Union([Type.String(), Type.Number()], { description: "Username (@name), chat id, or 'me'" }),
-            message_id: Type.Number({ minimum: 1, description: "ID of the voice note or video circle message" }),
-          }),
-          async execute(_id: string, params: { peer: string | number; message_id: number }) {
-            const res = await fetchBridge(api, profile, "/transcribe_voice", {
-              method: "POST",
-              body: JSON.stringify({ peer: params.peer, message_id: params.message_id }),
-            });
-            if (!res.ok) return toolResult(formatBridgeError(res));
-            const data = res.data as { ok?: boolean; text?: string; error?: string } | undefined;
-            if (data?.ok === false || data?.error) {
-              return toolResult(
-                "Transcription unavailable (Telegram Premium required). Use download_media to retrieve the audio file for external STT processing."
-              );
-            }
-            const text = typeof data?.text === "string" ? data.text : "";
-            return toolResult(text ? `Transcription: ${text}` : "Transcription returned empty text.");
-          },
+    api.registerTool(
+      {
+        name: `${prefix}_transcribe_voice`,
+        description:
+          `Transcribe a voice note or video circle using Telegram's built-in speech recognition (Premium feature) ` +
+          `via the "${profileLabel}" context. ` +
+          "If the account does not have Telegram Premium, returns an error — in that case use download_media to get the audio file and process it with available STT tools.",
+        parameters: Type.Object({
+          peer: Type.Union([Type.String(), Type.Number()], { description: "Username (@name), chat id, or 'me'" }),
+          message_id: Type.Number({ minimum: 1, description: "ID of the voice note or video circle message" }),
+        }),
+        async execute(_id: string, params: { peer: string | number; message_id: number }) {
+          const res = await fetchBridge(api, profile, "/transcribe_voice", {
+            method: "POST",
+            body: JSON.stringify({ peer: params.peer, message_id: params.message_id }),
+          });
+          if (!res.ok) return toolResult(formatBridgeError(res));
+          const data = res.data as { ok?: boolean; text?: string; error?: string } | undefined;
+          if (data?.ok === false || data?.error) {
+            return toolResult(
+              "Transcription unavailable (Telegram Premium required). Use download_media to retrieve the audio file for external STT processing."
+            );
+          }
+          const text = typeof data?.text === "string" ? data.text : "";
+          return toolResult(text ? `Transcription: ${text}` : "Transcription returned empty text.");
         },
-        optional
-      );
-    }
+      },
+      optional
+    );
 
     if (allowPrivilegedTools) {
       api.registerTool(
@@ -2333,6 +2339,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           typeof message.sender_name === "string" && message.sender_name ? `${message.sender_name}` : null,
           typeof message.date === "string" && message.date ? message.date : null,
           message.topic_id ? `topic:${message.topic_id}` : null,
+          message.reply_to_message_id ? `reply_to:${message.reply_to_message_id}` : null,
           message.has_media ? `media:${message.media_type ?? "yes"}` : null,
           message.latitude && message.longitude ? `geo:${message.latitude},${message.longitude}` : null,
         ].filter(Boolean);
@@ -2951,13 +2958,16 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
               sender_name?: string;
               sender_id?: unknown;
               topic_id?: unknown;
+              reply_to_message_id?: unknown;
             }>;
           })?.messages ?? [];
         const lines = messages.map((message) => {
           const parts = [
+            message.id ? `id:${message.id}` : null,
             `[${message.out ? "out" : "in"}]`,
             message.sender_name ? `${message.sender_name}` : message.sender_id ? `sender:${message.sender_id}` : null,
             message.topic_id ? `topic:${message.topic_id}` : null,
+            message.reply_to_message_id ? `reply_to:${message.reply_to_message_id}` : null,
             message.date ? `${message.date}` : null,
           ].filter(Boolean);
           return `${parts.join(" | ")}${parts.length ? " | " : ""}${message.text || "(no text)"}`;

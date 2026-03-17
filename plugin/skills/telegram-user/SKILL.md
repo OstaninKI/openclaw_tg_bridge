@@ -38,8 +38,8 @@ The same Telegram account may be exposed to multiple OpenClaw contexts, for exam
 
 - Interactive DM tools: `telegram_<context>_send_message`, `telegram_<context>_get_dialogs`
 - Additional interactive tools:
-  - baseline chat/message/admin tools: `telegram_<context>_send_location`, `telegram_<context>_edit_message`, `telegram_<context>_delete_message`, `telegram_<context>_forward_message`, `telegram_<context>_get_media_info`, `telegram_<context>_resolve_username`, `telegram_<context>_get_user_status`, `telegram_<context>_get_participants`, `telegram_<context>_get_admins`, `telegram_<context>_promote_admin`, `telegram_<context>_demote_admin`, `telegram_<context>_get_chat`, `telegram_<context>_get_message`, `telegram_<context>_get_history`, `telegram_<context>_search_messages`, `telegram_<context>_search_public_chats`, `telegram_<context>_get_pinned_messages`, `telegram_<context>_send_reaction`, `telegram_<context>_remove_reaction`, `telegram_<context>_get_message_reactions`
-  - privileged backend-host/self-account tools, only on profiles with `privilegedTools: true`: `telegram_<context>_send_file`, `telegram_<context>_send_voice`, `telegram_<context>_transcribe_voice`, `telegram_<context>_send_sticker`, `telegram_<context>_download_media`, `telegram_<context>_list_contacts`, `telegram_<context>_search_contacts`, `telegram_<context>_add_contact`, `telegram_<context>_delete_contact`, `telegram_<context>_block_user`, `telegram_<context>_unblock_user`, `telegram_<context>_get_blocked_users`, `telegram_<context>_create_group`, `telegram_<context>_create_channel`, `telegram_<context>_invite_to_group`, `telegram_<context>_get_invite_link`, `telegram_<context>_leave_chat`
+  - baseline chat/message/admin tools: `telegram_<context>_send_location`, `telegram_<context>_edit_message`, `telegram_<context>_delete_message`, `telegram_<context>_forward_message`, `telegram_<context>_get_media_info`, `telegram_<context>_resolve_username`, `telegram_<context>_get_user_status`, `telegram_<context>_get_participants`, `telegram_<context>_get_admins`, `telegram_<context>_promote_admin`, `telegram_<context>_demote_admin`, `telegram_<context>_get_chat`, `telegram_<context>_get_message`, `telegram_<context>_get_history`, `telegram_<context>_search_messages`, `telegram_<context>_search_public_chats`, `telegram_<context>_get_pinned_messages`, `telegram_<context>_send_reaction`, `telegram_<context>_remove_reaction`, `telegram_<context>_get_message_reactions`, `telegram_<context>_transcribe_voice`
+  - privileged backend-host/self-account tools, only on profiles with `privilegedTools: true`: `telegram_<context>_send_file`, `telegram_<context>_send_voice`, `telegram_<context>_send_sticker`, `telegram_<context>_download_media`, `telegram_<context>_list_contacts`, `telegram_<context>_search_contacts`, `telegram_<context>_add_contact`, `telegram_<context>_delete_contact`, `telegram_<context>_block_user`, `telegram_<context>_unblock_user`, `telegram_<context>_get_blocked_users`, `telegram_<context>_create_group`, `telegram_<context>_create_channel`, `telegram_<context>_invite_to_group`, `telegram_<context>_get_invite_link`, `telegram_<context>_leave_chat`
   - owner-only tools (requires owner-prefixed context id): `telegram_<context>_join_chat_by_link`, `telegram_<context>_list_dialog_folders`, `telegram_<context>_upsert_dialog_folder`, `telegram_<context>_delete_dialog_folder`
   - baseline tools with chat-type limits: `telegram_<context>_get_banned_users`, `telegram_<context>_ban_user`, `telegram_<context>_unban_user`, `telegram_<context>_get_recent_actions` work only on supergroups/channels
 - Shared reading/polling tools: `telegram_<context>_list_topics`, `telegram_<context>_get_messages`
@@ -84,9 +84,15 @@ When removing a trusted DM user:
 3. remove the sender id from `allowFrom` and `writeTo` if it is no longer used;
 4. remove the matching `trusted*_dm` policy and plugin profile.
 
+## Quoted messages (reply-to)
+
+When an inbound DM is a reply to another message, the body contains `[Reply to message | id:<N>]`. The `ReplyToMessageId` context field is also set. To read the quoted message call `telegram_<context>_get_message(peer=..., message_id=<N>)`. The output will include `reply_to:<M>` if the quoted message itself is also a reply.
+
+`get_messages` output includes `id:N` and `reply_to:N` for each message that is a reply, so reply chains are visible during history polling too.
+
 ## Voice and video circle transcription
 
-When an inbound DM event contains `[Telegram transcription available | use: transcribe_voice | id:<N>]` in the body (and `CanTranscribe: true` in context), Telegram's built-in speech recognition is available for that message. The bridge exposes this on profiles with `privilegedTools: true`.
+When an inbound DM event contains `[Telegram transcription available | use: transcribe_voice | id:<N>]` in the body (and `CanTranscribe: true` in context), Telegram's built-in speech recognition is available for that message. `transcribe_voice` is available on all interactive profiles; whether it succeeds depends only on whether the Telegram account has Premium.
 
 **Primary path (Premium account):**
 1. Call `telegram_<context>_transcribe_voice(peer=..., message_id=<N>)`.

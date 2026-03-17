@@ -2690,7 +2690,7 @@ test("transcribe_voice tool is registered for privileged profiles", () => {
   assert.ok(getTool(api, "telegram_owner_transcribe_voice"));
 });
 
-test("transcribe_voice tool is NOT registered for non-privileged profiles", () => {
+test("transcribe_voice tool IS registered for non-privileged interactive profiles", () => {
   const api = createApi({
     plugins: {
       entries: {
@@ -2703,7 +2703,7 @@ test("transcribe_voice tool is NOT registered for non-privileged profiles", () =
     },
   });
   register(api);
-  assert.equal(getTool(api, "telegram_trusted_transcribe_voice"), undefined);
+  assert.ok(getTool(api, "telegram_trusted_transcribe_voice"));
 });
 
 test("transcribe_voice tool calls /transcribe_voice endpoint", async () => {

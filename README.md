@@ -115,7 +115,7 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `chat_title`
   - `chat_username`
   - `topic_id` (forum thread root/top message id)
-  - `reply_to_message_id`
+  - `reply_to_message_id` (inbound DM body includes `[Reply to message | id:N]` hint when set; call `get_message` with that id to read the quoted content)
   - `has_media`
   - `media_type`
   - `file_name`
@@ -403,14 +403,13 @@ This will register tools like:
 - `telegram_sources_ro_list_topics`
 - `telegram_sources_ro_get_messages`
 
-All interactive profiles expose the baseline chat/message/admin surface. That includes tools such as `send_message`, `send_location`, `edit_message`, `delete_message`, `forward_message`, `get_message`, `get_history`, `search_messages`, `get_participants`, `get_admins`, `promote_admin`, `demote_admin`, `get_chat`, `search_public_chats`, `get_pinned_messages`, `send_reaction`, `remove_reaction`, `get_message_reactions`, `resolve_username`, `get_user_status`, `get_media_info`, and topic-aware reading.
+All interactive profiles expose the baseline chat/message/admin surface. That includes tools such as `send_message`, `send_location`, `edit_message`, `delete_message`, `forward_message`, `get_message`, `get_history`, `search_messages`, `get_participants`, `get_admins`, `promote_admin`, `demote_admin`, `get_chat`, `search_public_chats`, `get_pinned_messages`, `send_reaction`, `remove_reaction`, `get_message_reactions`, `resolve_username`, `get_user_status`, `get_media_info`, `transcribe_voice`, and topic-aware reading.
 
 Profiles with `"privilegedTools": true` keep that same baseline surface and additionally expose backend-host file tools plus self-account/contact mutation tools. The extra tools are:
 
 - backend-host file tools:
   - `telegram_owner_dm_send_file`
   - `telegram_owner_dm_send_voice`
-  - `telegram_owner_dm_transcribe_voice`
   - `telegram_owner_dm_send_sticker`
   - `telegram_owner_dm_download_media`
 - contacts and self-account flows:
