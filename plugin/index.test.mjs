@@ -2672,6 +2672,14 @@ test("poll backoff helper doubles delay and caps it", () => {
   assert.equal(__test.nextPollBackoffMs(20000, 1500), 30000);
 });
 
+test("poll failure delay honors retry-after when it is higher than local delay", () => {
+  assert.equal(__test.resolvePollFailureDelayMs({ ok: false, retryAfter: 6 }, 1500, 1500), 6000);
+});
+
+test("poll failure delay falls back to local delay when retry-after is missing", () => {
+  assert.equal(__test.resolvePollFailureDelayMs({ ok: false }, 3000, 1500), 3000);
+});
+
 // ── transcribe_voice tool ──────────────────────────────────────────────────
 
 test("transcribe_voice tool is registered for privileged profiles", () => {

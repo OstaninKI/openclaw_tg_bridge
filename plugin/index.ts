@@ -872,6 +872,14 @@ function nextPollBackoffMs(currentMs: number, baseMs: number, maxMs = 30000): nu
   return Math.min(maxMs, normalizedCurrentMs * 2);
 }
 
+function resolvePollFailureDelayMs(response: BridgeResponse, currentMs: number, baseMs: number): number {
+  const fallbackDelayMs = Math.max(Math.max(250, baseMs), currentMs);
+  if (typeof response.retryAfter !== "number" || !Number.isFinite(response.retryAfter) || response.retryAfter <= 0) {
+    return fallbackDelayMs;
+  }
+  return Math.max(fallbackDelayMs, Math.ceil(response.retryAfter * 1000));
+}
+
 function resolveChannelRuntime(ctx: GatewayStartContext): ChannelRuntimeCore {
   const runtime = ctx.channelRuntime ?? ctx.runtime?.channel;
   if (!runtime) {
@@ -1228,15 +1236,16 @@ async function startDmChannelMonitor(params: {
         `/dm/inbox/poll?timeout_ms=${Math.max(1000, params.account.pollTimeoutMs)}&limit=10`
       );
       if (!response.ok) {
+        const retryDelayMs = resolvePollFailureDelayMs(response, failureDelayMs, basePollDelayMs);
         updateGatewayStatus(params.statusContext ?? { account: params.account, cfg: params.cfg }, {
           mode: "degraded",
           connected: false,
           lastError: formatBridgeError(response),
-          retryInMs: failureDelayMs,
+          retryInMs: retryDelayMs,
         });
         params.api.logger?.warn(`telegram-user-bridge DM poll failed: ${formatBridgeError(response)}`);
-        await sleepWithAbort(failureDelayMs, params.abortSignal);
-        failureDelayMs = nextPollBackoffMs(failureDelayMs, basePollDelayMs);
+        await sleepWithAbort(retryDelayMs, params.abortSignal);
+        failureDelayMs = nextPollBackoffMs(retryDelayMs, basePollDelayMs);
         continue;
       }
       failureDelayMs = basePollDelayMs;
@@ -2990,6 +2999,7 @@ export const __test = {
   buildInboundDmBody,
   collectRelevantDirectBindings,
   formatBridgeError,
+  resolvePollFailureDelayMs,
   normalizePeerKey,
   nextPollBackoffMs,
   startInboundDmTypingLoop,
