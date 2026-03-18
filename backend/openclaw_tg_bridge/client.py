@@ -24,8 +24,7 @@ MAX_MESSAGE_LENGTH = 4096
 MAX_SEND_CHUNKS = 20
 OBSERVED_PEER_CACHE_SIZE = 512
 MAX_CONTACT_VCARD_LENGTH = 512
-MAX_TRANSCRIPTION_POLL_ATTEMPTS = 3
-TRANSCRIPTION_POLL_INTERVAL_SEC = 1.5
+TRANSCRIPTION_WAIT_SEC = 30
 
 
 class BridgeError(Exception):
@@ -1244,16 +1243,38 @@ class BridgeClient:
         result = await _do_transcribe()
         if result is None:
             return {"ok": False, "error": "transcription_unavailable"}
-        for _ in range(MAX_TRANSCRIPTION_POLL_ATTEMPTS):
-            if not getattr(result, "pending", False):
-                break
-            await asyncio.sleep(TRANSCRIPTION_POLL_INTERVAL_SEC)
-            polled = await _do_transcribe()
-            if polled is None:
-                break
-            result = polled
-        text = getattr(result, "text", None) or ""
-        return {"ok": True, "text": text}
+
+        # Fast path: transcription completed inline
+        if not getattr(result, "pending", False):
+            return {"ok": True, "text": getattr(result, "text", None) or ""}
+
+        # Slow path: wait for UpdateTranscribedAudio event from Telegram
+        transcription_id = getattr(result, "transcription_id", None)
+        if transcription_id is None:
+            return {"ok": True, "text": getattr(result, "text", None) or ""}
+
+        from telethon import events  # type: ignore[import-untyped]
+
+        types = _telethon_types()
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+        async def _on_transcription_update(update: Any) -> None:
+            if getattr(update, "transcription_id", None) == transcription_id:
+                if not future.done():
+                    future.set_result(getattr(update, "text", None) or "")
+
+        self._client.add_event_handler(
+            _on_transcription_update,
+            events.Raw(types=types.UpdateTranscribedAudio),
+        )
+        try:
+            async with asyncio.timeout(TRANSCRIPTION_WAIT_SEC):
+                text = await future
+            return {"ok": True, "text": text}
+        except TimeoutError:
+            return {"ok": True, "text": "", "pending": True}
+        finally:
+            self._client.remove_event_handler(_on_transcription_update)
 
     async def get_message(
         self,

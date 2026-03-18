@@ -2766,6 +2766,33 @@ test("transcribe_voice tool returns fallback hint when transcription unavailable
   assert.match(result.content[0].text, /download_media/);
 });
 
+test("transcribe_voice tool returns retry hint when transcription is pending", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [{ id: "owner", label: "Owner", privilegedTools: true }],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ ok: true, text: "", pending: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  const tool = getTool(api, "telegram_owner_transcribe_voice");
+  const result = await tool.execute("1", { peer: "me", message_id: 42 });
+
+  assert.match(result.content[0].text, /still processing/i);
+  assert.match(result.content[0].text, /retry|download_media/i);
+});
+
 // ── can_transcribe hint in buildInboundDmBody ──────────────────────────────
 
 test("buildInboundDmBody includes transcription hint when can_transcribe is true", () => {

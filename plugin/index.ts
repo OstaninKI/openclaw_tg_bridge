@@ -1694,10 +1694,16 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             body: JSON.stringify({ peer: params.peer, message_id: params.message_id }),
           });
           if (!res.ok) return toolResult(formatBridgeError(res));
-          const data = res.data as { ok?: boolean; text?: string; error?: string } | undefined;
+          const data = res.data as { ok?: boolean; text?: string; error?: string; pending?: boolean } | undefined;
           if (data?.ok === false || data?.error) {
             return toolResult(
               "Transcription unavailable (Telegram Premium required). Use download_media to retrieve the audio file for external STT processing."
+            );
+          }
+          if (data?.pending === true) {
+            return toolResult(
+              "Transcription is still processing on Telegram's side (long voice message). " +
+              "You can retry transcribe_voice in 10-15 seconds, or use download_media to retrieve the audio file for external STT processing."
             );
           }
           const text = typeof data?.text === "string" ? data.text : "";

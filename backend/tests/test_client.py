@@ -1,5 +1,6 @@
 """Unit tests for bridge client logic without real Telethon."""
 
+import asyncio
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from openclaw_tg_bridge.client import (
     BridgeRateLimitError,
     BridgeValidationError,
     MAX_SEND_CHUNKS,
+    TRANSCRIPTION_WAIT_SEC,
     _extract_media_summary,
     _is_video_note,
     _is_voice_note,
@@ -1395,6 +1397,8 @@ class TestTranscribeVoice(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.mock_tg = AsyncMock()
         self.mock_tg.is_connected = MagicMock(return_value=True)
+        self.mock_tg.add_event_handler = MagicMock()
+        self.mock_tg.remove_event_handler = MagicMock()
         self.mock_tg.get_entity = AsyncMock(return_value=SimpleNamespace(id=1, username="me"))
 
     def create_bridge(self, is_premium: bool | None = True) -> BridgeClient:
@@ -1433,22 +1437,73 @@ class TestTranscribeVoice(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], "hello world")
 
-    async def test_polls_when_pending(self) -> None:
+    async def test_waits_for_update_event(self) -> None:
         bridge = self.create_bridge(is_premium=True)
-        pending_result = SimpleNamespace(pending=True, text="")
-        done_result = SimpleNamespace(pending=False, text="transcribed")
-        self.mock_tg.side_effect = [pending_result, done_result]
+        pending_result = SimpleNamespace(pending=True, text="", transcription_id=12345)
+        self.mock_tg.return_value = pending_result
+
+        captured_handler: list = []
+        original_add = self.mock_tg.add_event_handler
+
+        def _capture_add(handler, event_filter):
+            captured_handler.append(handler)
+            return original_add(handler, event_filter)
+
+        self.mock_tg.add_event_handler = _capture_add
 
         functions_ns = SimpleNamespace(
             messages=SimpleNamespace(TranscribeAudioRequest=lambda **kw: SimpleNamespace(**kw))
         )
+        fake_update_type = type("UpdateTranscribedAudio", (), {})
+        types_ns = SimpleNamespace(
+            UpdateTranscribedAudio=fake_update_type,
+            DocumentAttributeAudio=type("DocumentAttributeAudio", (), {}),
+            DocumentAttributeVideo=type("DocumentAttributeVideo", (), {}),
+        )
+
+        async def _run_transcribe():
+            return await bridge.transcribe_voice("me", 42)
+
         with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns), \
-             patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()):
+             patch("openclaw_tg_bridge.client._telethon_types", return_value=types_ns):
+            task = asyncio.create_task(_run_transcribe())
+            # Give the task time to register the handler
+            await asyncio.sleep(0.05)
+            self.assertTrue(len(captured_handler) > 0, "Event handler should be registered")
+            # Simulate the Telegram update arriving
+            update = SimpleNamespace(transcription_id=12345, text="transcribed text")
+            await captured_handler[0](update)
+            result = await task
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["text"], "transcribed text")
+        self.mock_tg.remove_event_handler.assert_called_once()
+
+    async def test_returns_pending_on_timeout(self) -> None:
+        bridge = self.create_bridge(is_premium=True)
+        pending_result = SimpleNamespace(pending=True, text="", transcription_id=99999)
+        self.mock_tg.return_value = pending_result
+
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(TranscribeAudioRequest=lambda **kw: SimpleNamespace(**kw))
+        )
+        fake_update_type = type("UpdateTranscribedAudio", (), {})
+        types_ns = SimpleNamespace(
+            UpdateTranscribedAudio=fake_update_type,
+            DocumentAttributeAudio=type("DocumentAttributeAudio", (), {}),
+            DocumentAttributeVideo=type("DocumentAttributeVideo", (), {}),
+        )
+
+        # Patch TRANSCRIPTION_WAIT_SEC to a tiny value so test doesn't wait 30s
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns), \
+             patch("openclaw_tg_bridge.client._telethon_types", return_value=types_ns), \
+             patch("openclaw_tg_bridge.client.TRANSCRIPTION_WAIT_SEC", 0.05):
             result = await bridge.transcribe_voice("me", 42)
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["text"], "transcribed")
-        self.assertEqual(self.mock_tg.await_count, 2)
+        self.assertEqual(result["text"], "")
+        self.assertTrue(result.get("pending"))
+        self.mock_tg.remove_event_handler.assert_called_once()
 
     async def test_returns_fallback_on_premium_required_error(self) -> None:
         bridge = self.create_bridge(is_premium=None)  # unknown premium status

@@ -97,9 +97,10 @@ When an inbound DM event contains `[Telegram transcription available | use: tran
 **Primary path (Premium account):**
 1. Call `telegram_<context>_transcribe_voice(peer=..., message_id=<N>)`.
 2. On success, the tool returns `Transcription: <text>` — use it directly.
+3. For long voice messages, Telegram may need up to 30 seconds for server-side processing. The bridge waits automatically. If it still isn't ready, the tool returns a "still processing" hint — **retry once after 10-15 seconds** before falling back.
 
-**Fallback path (no Premium or transcription fails):**
-1. The tool returns a message about unavailability.
+**Fallback path (no Premium, transcription fails, or still pending after retry):**
+1. The tool returns a message about unavailability or processing timeout.
 2. Call `telegram_<context>_download_media(peer=..., message_id=<N>)` to retrieve the audio/video file.
 3. Process the downloaded file with available STT tools (e.g. local Whisper, system speech recognition).
 
