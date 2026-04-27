@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import register, { __test } from "./index.ts";
@@ -23,6 +24,13 @@ function createApi(config = {}) {
 function getTool(api, name) {
   return api.tools.find((tool) => tool.name === name);
 }
+
+test("plugin manifest declares static config metadata for owned channel", async () => {
+  const manifest = JSON.parse(await readFile(new URL("./openclaw.plugin.json", import.meta.url), "utf8"));
+
+  assert.deepEqual(manifest.channels, ["telegram-user-bridge"]);
+  assert.equal(typeof manifest.channelConfigs?.["telegram-user-bridge"]?.schema, "object");
+});
 
 test("plugin registers isolated profile toolsets and forwards profile headers", async () => {
   const api = createApi({

@@ -97,5 +97,114 @@
     "replyDelayMaxSec": { "label": "Reply delay max (sec)" }
   },
   "channels": ["telegram-user-bridge"],
+  "channelConfigs": {
+    "telegram-user-bridge": {
+      "label": "Unofficial Telegram User DM",
+      "description": "Event-driven direct-message channel for one live Telegram user account via the bridge backend.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultAccountId": {
+            "type": "string",
+            "description": "Default channel account id used when OpenClaw does not specify one"
+          },
+          "accounts": {
+            "type": "object",
+            "description": "Telegram DM channel accounts keyed by OpenClaw account id",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "label": {
+                  "type": "string",
+                  "description": "Human-readable account label"
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "default": "http://127.0.0.1:8765",
+                  "description": "Bridge HTTP API base URL"
+                },
+                "apiToken": {
+                  "type": "string",
+                  "description": "Optional Bearer token for the bridge backend"
+                },
+                "strictPeerBindings": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Require exact OpenClaw bindings for allowed inbound DM senders"
+                },
+                "timeoutMs": {
+                  "type": "number",
+                  "default": 30000,
+                  "description": "HTTP request timeout in milliseconds"
+                },
+                "pollTimeoutMs": {
+                  "type": "number",
+                  "default": 25000,
+                  "description": "Long-poll timeout for inbound DM polling"
+                },
+                "pollIntervalMs": {
+                  "type": "number",
+                  "default": 1500,
+                  "description": "Delay between successful inbound DM polls"
+                },
+                "markReadOnInbound": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Send Telegram read receipts for accepted inbound DMs"
+                },
+                "typingWhileReplying": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Send Telegram typing status while OpenClaw is generating a reply"
+                },
+                "policyProfile": {
+                  "type": "string",
+                  "description": "Backend policy profile for this channel account"
+                },
+                "replyDelaySec": {
+                  "type": "number",
+                  "description": "Reply delay override enforced by the backend for this channel account"
+                },
+                "replyDelayMaxSec": {
+                  "type": "number",
+                  "description": "Optional max delay override enforced by the backend for this channel account"
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Readable inbound DM sender ids/usernames enforced by the backend"
+                },
+                "denyFrom": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Denied inbound DM sender ids/usernames enforced by the backend"
+                },
+                "writeTo": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Writable DM target ids/usernames enforced by the backend"
+                },
+                "denyWriteTo": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Denied writable DM target ids/usernames enforced by the backend"
+                }
+              }
+            }
+          }
+        }
+      },
+      "uiHints": {
+        "defaultAccountId": { "label": "Default account" },
+        "accounts": { "label": "Accounts" }
+      }
+    }
+  },
   "skills": ["./skills/telegram-user"]
 }
