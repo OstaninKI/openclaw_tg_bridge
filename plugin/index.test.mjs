@@ -100,7 +100,15 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   };
 
   const sendTool = getTool(api, "telegram_owner_send_message");
-  const result = await sendTool.execute("1", { peer: "@durov", text: "hello" });
+  const result = await sendTool.execute("1", {
+    peer: "@durov",
+    text: "hello",
+    silent: true,
+    background: true,
+    clear_draft: true,
+    send_as: "@channel",
+    message_effect_id: 123456,
+  });
 
   assert.equal(capturedUrl, "http://127.0.0.1:8765/send_message");
   assert.equal(capturedInit.method, "POST");
@@ -108,6 +116,16 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   assert.equal(capturedInit.headers["X-OpenClaw-Policy-Profile"], "owner");
   assert.equal(capturedInit.headers["X-OpenClaw-Allow-From"], "@durov,-1001");
   assert.equal(capturedInit.headers["X-OpenClaw-Write-To"], "me");
+  assert.deepEqual(JSON.parse(capturedInit.body), {
+    peer: "@durov",
+    text: "hello",
+    reply_to: null,
+    silent: true,
+    background: true,
+    clear_draft: true,
+    send_as: "@channel",
+    message_effect_id: 123456,
+  });
   assert.match(result.content[0].text, /Message sent/);
 });
 
@@ -172,11 +190,32 @@ test("plugin sends file via backend endpoint", async () => {
   };
 
   const tool = getTool(api, "telegram_user_send_file");
-  const result = await tool.execute("1", { peer: "me", file_path: "/tmp/test.txt", caption: "doc" });
+  const result = await tool.execute("1", {
+    peer: "me",
+    file_path: "/tmp/test.txt",
+    caption: "doc",
+    mime_type: "text/plain",
+    silent: true,
+    background: true,
+    clear_draft: true,
+    send_as: "@channel",
+    message_effect_id: 123456,
+  });
 
   assert.equal(capturedUrl, "http://127.0.0.1:8765/send_file");
   assert.equal(capturedInit.method, "POST");
-  assert.match(capturedInit.body, /\/tmp\/test\.txt/);
+  assert.deepEqual(JSON.parse(capturedInit.body), {
+    peer: "me",
+    file_path: "/tmp/test.txt",
+    caption: "doc",
+    reply_to: null,
+    mime_type: "text/plain",
+    silent: true,
+    background: true,
+    clear_draft: true,
+    send_as: "@channel",
+    message_effect_id: 123456,
+  });
   assert.match(result.content[0].text, /File sent/);
 });
 
@@ -353,12 +392,64 @@ test("plugin sends reaction and block user via backend endpoints", async () => {
     emoji: "🔥",
     big: true,
   });
+  await getTool(api, "telegram_user_send_reaction").execute("2", {
+    peer: -1001,
+    message_id: 78,
+    reaction: "custom:123456",
+  });
   await getTool(api, "telegram_user_block_user").execute("2", { peer: "@durov" });
 
   assert.equal(seen[0].url, "http://127.0.0.1:8765/send_reaction");
   assert.match(seen[0].init.body, /"emoji":"🔥"/);
-  assert.equal(seen[1].url, "http://127.0.0.1:8765/block_user");
-  assert.match(seen[1].init.body, /@durov/);
+  assert.equal(seen[1].url, "http://127.0.0.1:8765/send_reaction");
+  assert.match(seen[1].init.body, /"reaction":"custom:123456"/);
+  assert.equal(seen[2].url, "http://127.0.0.1:8765/block_user");
+  assert.match(seen[2].init.body, /@durov/);
+});
+
+test("plugin forwards newer admin and ban rights", async () => {
+  const api = createApi();
+  register(api);
+
+  const payloads = [];
+  globalThis.fetch = async (url, init) => {
+    payloads.push({ url: String(url), body: JSON.parse(String(init.body || "{}")) });
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  await getTool(api, "telegram_user_promote_admin").execute("1", {
+    peer: -1001,
+    user_peer: 7,
+    title: "Moderator",
+    manage_topics: true,
+    post_stories: true,
+    edit_stories: true,
+    delete_stories: true,
+    manage_direct_messages: true,
+  });
+  await getTool(api, "telegram_user_ban_user").execute("2", {
+    peer: -1001,
+    user_peer: 7,
+    until_date: 1900000000,
+    manage_topics: true,
+    send_photos: true,
+    send_videos: true,
+    send_roundvideos: true,
+    send_audios: true,
+    send_voices: true,
+    send_docs: true,
+    send_plain: true,
+  });
+
+  assert.equal(payloads[0].url, "http://127.0.0.1:8765/promote_admin");
+  assert.equal(payloads[0].body.manage_topics, true);
+  assert.equal(payloads[0].body.manage_direct_messages, true);
+  assert.equal(payloads[1].url, "http://127.0.0.1:8765/ban_user");
+  assert.equal(payloads[1].body.send_photos, true);
+  assert.equal(payloads[1].body.send_plain, true);
 });
 
 test("plugin reads contacts and recent actions via backend endpoints", async () => {
@@ -528,6 +619,10 @@ test("plugin formats richer message metadata for source polling", async () => {
             sender_name: "Alice",
             topic_id: 900,
             date: "2026-03-14T10:00:00+00:00",
+            message_effect_id: 123,
+            quick_reply_shortcut_id: 55,
+            paid_message_stars: 3,
+            post_author: "Author",
           },
         ],
       }),
@@ -542,6 +637,10 @@ test("plugin formats richer message metadata for source polling", async () => {
 
   assert.match(result.content[0].text, /Alice/);
   assert.match(result.content[0].text, /topic:900/);
+  assert.match(result.content[0].text, /effect:123/);
+  assert.match(result.content[0].text, /quick_reply:55/);
+  assert.match(result.content[0].text, /stars:3/);
+  assert.match(result.content[0].text, /author:Author/);
   assert.match(result.content[0].text, /important update/);
 });
 

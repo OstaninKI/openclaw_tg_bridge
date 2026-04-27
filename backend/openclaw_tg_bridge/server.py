@@ -400,6 +400,11 @@ class SendMessageBody(BaseModel):
     peer: str | int = Field(..., description="Username (@name), chat id, or 'me'")
     text: str = Field(..., min_length=1, max_length=100_000)
     reply_to: int | None = None
+    silent: bool | None = None
+    background: bool | None = None
+    clear_draft: bool | None = None
+    send_as: str | int | None = None
+    message_effect_id: int | None = Field(default=None, ge=1)
 
 
 class SendFileBody(BaseModel):
@@ -407,6 +412,12 @@ class SendFileBody(BaseModel):
     file_path: str = Field(..., min_length=1)
     caption: str | None = None
     reply_to: int | None = None
+    mime_type: str | None = None
+    silent: bool | None = None
+    background: bool | None = None
+    clear_draft: bool | None = None
+    send_as: str | int | None = None
+    message_effect_id: int | None = Field(default=None, ge=1)
 
 
 class SendLocationBody(BaseModel):
@@ -521,12 +532,25 @@ class AdminMutationBody(BaseModel):
     user_peer: str | int = Field(..., description="User username or id")
     title: str | None = None
     until_date: int | None = None
+    manage_topics: bool | None = None
+    post_stories: bool | None = None
+    edit_stories: bool | None = None
+    delete_stories: bool | None = None
+    manage_direct_messages: bool | None = None
+    send_photos: bool | None = None
+    send_videos: bool | None = None
+    send_roundvideos: bool | None = None
+    send_audios: bool | None = None
+    send_voices: bool | None = None
+    send_docs: bool | None = None
+    send_plain: bool | None = None
 
 
 class ReactionBody(BaseModel):
     peer: str | int = Field(..., description="Chat username or id")
     message_id: int = Field(..., ge=1)
-    emoji: str = Field(..., min_length=1)
+    emoji: str | None = Field(default=None, min_length=1)
+    reaction: str | None = Field(default=None, min_length=1)
     big: bool = False
 
 
@@ -875,6 +899,11 @@ async def send_message(request: Request, body: SendMessageBody):
             body.peer,
             body.text,
             reply_to=body.reply_to,
+            silent=body.silent,
+            background=body.background,
+            clear_draft=body.clear_draft,
+            send_as=body.send_as,
+            message_effect_id=body.message_effect_id,
             policy_overrides=overrides,
         )
         return result
@@ -897,6 +926,12 @@ async def send_file(request: Request, body: SendFileBody):
             body.file_path,
             caption=body.caption,
             reply_to=body.reply_to,
+            mime_type=body.mime_type,
+            silent=body.silent,
+            background=body.background,
+            clear_draft=body.clear_draft,
+            send_as=body.send_as,
+            message_effect_id=body.message_effect_id,
             policy_overrides=overrides,
         )
         return result
@@ -1608,6 +1643,11 @@ async def promote_admin(request: Request, body: AdminMutationBody):
             body.peer,
             body.user_peer,
             title=body.title,
+            manage_topics=body.manage_topics,
+            post_stories=body.post_stories,
+            edit_stories=body.edit_stories,
+            delete_stories=body.delete_stories,
+            manage_direct_messages=body.manage_direct_messages,
             policy_overrides=overrides,
         )
     except ValueError as exc:
@@ -1647,6 +1687,14 @@ async def ban_user(request: Request, body: AdminMutationBody):
             body.peer,
             body.user_peer,
             until_date=body.until_date,
+            manage_topics=body.manage_topics,
+            send_photos=body.send_photos,
+            send_videos=body.send_videos,
+            send_roundvideos=body.send_roundvideos,
+            send_audios=body.send_audios,
+            send_voices=body.send_voices,
+            send_docs=body.send_docs,
+            send_plain=body.send_plain,
             policy_overrides=overrides,
         )
     except ValueError as exc:
@@ -1718,6 +1766,7 @@ async def send_reaction(request: Request, body: ReactionBody):
             body.peer,
             body.message_id,
             body.emoji,
+            reaction=body.reaction,
             big=body.big,
             policy_overrides=overrides,
         )

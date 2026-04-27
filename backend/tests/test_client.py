@@ -4,6 +4,7 @@ import asyncio
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from openclaw_tg_bridge.client import (
@@ -18,6 +19,7 @@ from openclaw_tg_bridge.client import (
     _is_video_note,
     _is_voice_note,
     _normalize_peer,
+    _serialize_message,
     _split_text,
     build_policy,
 )
@@ -55,6 +57,27 @@ class TestClientHelpers(unittest.TestCase):
         self.assertEqual(policy.write_scope.allow, frozenset())
         self.assertEqual(policy.reply_delay_sec, 2.0)
         self.assertIsNone(policy.reply_delay_max_sec)
+
+    def test_serialize_message_includes_new_optional_metadata(self) -> None:
+        message = SimpleNamespace(
+            id=10,
+            text="hello",
+            date=None,
+            out=False,
+            sender_id=7,
+            grouped_id=99,
+            effect=123,
+            quick_reply_shortcut_id=55,
+            paid_message_stars=3,
+            post_author="Author",
+        )
+
+        payload = _serialize_message(message)
+
+        self.assertEqual(payload["message_effect_id"], 123)
+        self.assertEqual(payload["quick_reply_shortcut_id"], 55)
+        self.assertEqual(payload["paid_message_stars"], 3)
+        self.assertEqual(payload["post_author"], "Author")
 
 
 class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
@@ -116,6 +139,34 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["message_id"], 100)
         self.mock_tg.send_message.assert_awaited_once_with(entity, "hello", reply_to=None)
         sleep_mock.assert_awaited()
+
+    async def test_send_message_forwards_new_send_options(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.send_message.return_value = SimpleNamespace(id=100)
+
+        with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()):
+            await bridge.send_message(
+                "42",
+                "hello",
+                silent=True,
+                background=True,
+                clear_draft=True,
+                send_as="@channel",
+                message_effect_id=123456,
+            )
+
+        self.mock_tg.send_message.assert_awaited_once_with(
+            entity,
+            "hello",
+            reply_to=None,
+            silent=True,
+            background=True,
+            clear_draft=True,
+            send_as="@channel",
+            message_effect_id=123456,
+        )
 
     async def test_send_message_uses_observed_entity_for_numeric_peer(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["1470044"])
@@ -568,6 +619,40 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
             "/tmp/file.txt",
             caption="hello",
             reply_to=None,
+        )
+
+    async def test_send_file_forwards_new_send_options(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42", "me"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.send_file.return_value = SimpleNamespace(id=333)
+
+        with patch("openclaw_tg_bridge.client.Path.exists", return_value=True), patch(
+            "openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()
+        ):
+            await bridge.send_file(
+                "42",
+                "/tmp/file.txt",
+                caption="hello",
+                mime_type="text/plain",
+                silent=True,
+                background=True,
+                clear_draft=True,
+                send_as="@channel",
+                message_effect_id=123456,
+            )
+
+        self.mock_tg.send_file.assert_awaited_once_with(
+            entity,
+            "/tmp/file.txt",
+            caption="hello",
+            reply_to=None,
+            mime_type="text/plain",
+            silent=True,
+            background=True,
+            clear_draft=True,
+            send_as="@channel",
+            message_effect_id=123456,
         )
 
     async def test_send_file_requires_self_write_access(self) -> None:
@@ -1057,6 +1142,41 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
             {"kind": "edit_chat_admin", "chat_id": 42, "user_id": SimpleNamespace(id=7, username="alice"), "is_admin": True}
         )
 
+    async def test_promote_admin_includes_new_admin_rights(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42", "7"])
+        channel = SimpleNamespace(id=42, username="chat", broadcast=True)
+        user = SimpleNamespace(id=7, username="mod")
+        self.mock_tg.get_entity.side_effect = [channel, user]
+        captured_rights: dict[str, Any] = {}
+
+        def make_admin_rights(**kwargs: Any) -> Any:
+            captured_rights.update(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        types_ns = SimpleNamespace(ChatAdminRights=make_admin_rights)
+        functions_ns = SimpleNamespace(
+            channels=SimpleNamespace(EditAdminRequest=lambda **kwargs: {"kind": "edit_admin", **kwargs})
+        )
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns), patch(
+            "openclaw_tg_bridge.client._telethon_types", return_value=types_ns
+        ):
+            await bridge.promote_admin(
+                "42",
+                "7",
+                manage_topics=True,
+                post_stories=True,
+                edit_stories=True,
+                delete_stories=True,
+                manage_direct_messages=True,
+            )
+
+        self.assertTrue(captured_rights["manage_topics"])
+        self.assertTrue(captured_rights["post_stories"])
+        self.assertTrue(captured_rights["edit_stories"])
+        self.assertTrue(captured_rights["delete_stories"])
+        self.assertTrue(captured_rights["manage_direct_messages"])
+
     async def test_demote_admin_supports_basic_groups(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["42", "7"])
         self.mock_tg.get_entity.side_effect = [
@@ -1084,6 +1204,47 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(BridgeValidationError, "channels and supergroups"):
             await bridge.ban_user("42", "7")
+
+    async def test_ban_user_includes_granular_media_ban_rights(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42", "7"])
+        channel = SimpleNamespace(id=42, username="chat", megagroup=True)
+        user = SimpleNamespace(id=7, username="spammer")
+        self.mock_tg.get_entity.side_effect = [channel, user]
+        captured_rights: dict[str, Any] = {}
+
+        def make_banned_rights(**kwargs: Any) -> Any:
+            captured_rights.update(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        types_ns = SimpleNamespace(ChatBannedRights=make_banned_rights)
+        functions_ns = SimpleNamespace(
+            channels=SimpleNamespace(EditBannedRequest=lambda **kwargs: {"kind": "edit_banned", **kwargs})
+        )
+
+        with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns), patch(
+            "openclaw_tg_bridge.client._telethon_types", return_value=types_ns
+        ):
+            await bridge.ban_user(
+                "42",
+                "7",
+                manage_topics=True,
+                send_photos=True,
+                send_videos=True,
+                send_roundvideos=True,
+                send_audios=True,
+                send_voices=True,
+                send_docs=True,
+                send_plain=True,
+            )
+
+        self.assertTrue(captured_rights["manage_topics"])
+        self.assertTrue(captured_rights["send_photos"])
+        self.assertTrue(captured_rights["send_videos"])
+        self.assertTrue(captured_rights["send_roundvideos"])
+        self.assertTrue(captured_rights["send_audios"])
+        self.assertTrue(captured_rights["send_voices"])
+        self.assertTrue(captured_rights["send_docs"])
+        self.assertTrue(captured_rights["send_plain"])
 
     async def test_get_banned_users_rejects_basic_groups(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"])
@@ -1130,6 +1291,52 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.mock_tg.get_input_entity.assert_awaited_once_with(entity)
 
+    async def test_send_reaction_supports_custom_emoji_document_id(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        input_entity = SimpleNamespace(id=42)
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_input_entity.return_value = input_entity
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(SendReactionRequest=lambda **kwargs: {"kind": "reaction", **kwargs})
+        )
+        types_ns = SimpleNamespace(
+            ReactionEmoji=lambda emoticon: {"kind": "emoji", "emoticon": emoticon},
+            ReactionCustomEmoji=lambda document_id: {"kind": "custom", "document_id": document_id},
+        )
+
+        with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()), patch(
+            "openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns
+        ), patch("openclaw_tg_bridge.client._telethon_types", return_value=types_ns):
+            result = await bridge.send_reaction("42", 77, reaction="custom:123456")
+
+        self.assertTrue(result["ok"])
+        request = self.mock_tg.__call__.await_args.args[0]
+        self.assertEqual(request["reaction"], [{"kind": "custom", "document_id": 123456}])
+
+    async def test_send_reaction_supports_paid_reaction(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42"])
+        entity = SimpleNamespace(id=42, username="allowed")
+        input_entity = SimpleNamespace(id=42)
+        self.mock_tg.get_entity.return_value = entity
+        self.mock_tg.get_input_entity.return_value = input_entity
+        functions_ns = SimpleNamespace(
+            messages=SimpleNamespace(SendReactionRequest=lambda **kwargs: {"kind": "reaction", **kwargs})
+        )
+        types_ns = SimpleNamespace(
+            ReactionEmoji=lambda emoticon: {"kind": "emoji", "emoticon": emoticon},
+            ReactionPaid=lambda: {"kind": "paid"},
+        )
+
+        with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()), patch(
+            "openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns
+        ), patch("openclaw_tg_bridge.client._telethon_types", return_value=types_ns):
+            result = await bridge.send_reaction("42", 77, reaction="paid")
+
+        self.assertTrue(result["ok"])
+        request = self.mock_tg.__call__.await_args.args[0]
+        self.assertEqual(request["reaction"], [{"kind": "paid"}])
+
     async def test_get_message_reactions_returns_emoji_counts(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"])
         entity = SimpleNamespace(id=42, username="allowed")
@@ -1144,13 +1351,23 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
                 SimpleNamespace(reaction=SimpleNamespace(emoticon="🔥")),
                 SimpleNamespace(reaction=SimpleNamespace(emoticon="👍")),
                 SimpleNamespace(reaction=SimpleNamespace(emoticon="🔥")),
+                SimpleNamespace(reaction=SimpleNamespace(document_id=123456)),
+                SimpleNamespace(reaction=type("ReactionPaid", (), {})()),
             ]
         )
 
         with patch("openclaw_tg_bridge.client._telethon_functions", return_value=functions_ns):
             reactions = await bridge.get_message_reactions("42", 77, limit=20)
 
-        self.assertEqual(reactions, [{"count": 2, "emoji": "🔥"}, {"count": 1, "emoji": "👍"}])
+        self.assertEqual(
+            reactions,
+            [
+                {"count": 2, "emoji": "🔥"},
+                {"count": 1, "emoji": "custom:123456"},
+                {"count": 1, "emoji": "paid"},
+                {"count": 1, "emoji": "👍"},
+            ],
+        )
 
     async def test_get_chat_loads_full_channel_info(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"])

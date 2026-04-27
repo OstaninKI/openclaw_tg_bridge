@@ -246,6 +246,8 @@ def _split_text(text: str, max_len: int) -> list[str]:
 def _reaction_label(reaction: Any) -> str | None:
     if reaction is None:
         return None
+    if type(reaction).__name__ == "ReactionPaid":
+        return "paid"
     emoticon = getattr(reaction, "emoticon", None)
     if isinstance(emoticon, str) and emoticon.strip():
         return emoticon
@@ -253,6 +255,27 @@ def _reaction_label(reaction: Any) -> str | None:
     if isinstance(document_id, int):
         return f"custom:{document_id}"
     return None
+
+
+def _build_reaction(value: str, types: Any) -> Any:
+    reaction = (value or "").strip()
+    if not reaction:
+        raise BridgeValidationError("reaction is required.")
+    normalized = reaction.lower()
+    if normalized.startswith("custom:"):
+        raw_document_id = reaction.split(":", 1)[1].strip()
+        if not raw_document_id.isdigit():
+            raise BridgeValidationError("custom reaction must use custom:<document_id>.")
+        factory = getattr(types, "ReactionCustomEmoji", None)
+        if factory is None:
+            raise BridgeValidationError("Custom emoji reactions are not supported by the installed Telethon version.")
+        return factory(document_id=int(raw_document_id))
+    if normalized == "paid":
+        factory = getattr(types, "ReactionPaid", None)
+        if factory is None:
+            raise BridgeValidationError("Paid reactions are not supported by the installed Telethon version.")
+        return factory()
+    return types.ReactionEmoji(emoticon=reaction)
 
 
 def _serialize_message_entities(message: Any) -> list[dict[str, Any]]:
@@ -441,6 +464,29 @@ def _serialize_message(
         "reply_to_message_id": getattr(message, "reply_to_msg_id", None),
         "grouped_id": getattr(message, "grouped_id", None),
     }
+    message_effect_id = getattr(message, "message_effect_id", None)
+    if message_effect_id is None:
+        message_effect_id = getattr(message, "effect", None)
+    scalar_metadata = {
+        "message_effect_id": message_effect_id,
+        "quick_reply_shortcut_id": getattr(message, "quick_reply_shortcut_id", None),
+        "paid_message_stars": getattr(message, "paid_message_stars", None),
+        "post_author": getattr(message, "post_author", None),
+        "via_bot_id": getattr(message, "via_bot_id", None),
+        "views": getattr(message, "views", None),
+        "forwards": getattr(message, "forwards", None),
+        "ttl_period": getattr(message, "ttl_period", None),
+        "noforwards": getattr(message, "noforwards", None),
+        "invert_media": getattr(message, "invert_media", None),
+    }
+    for key, value in scalar_metadata.items():
+        if isinstance(value, str) and value.strip():
+            payload[key] = value.strip()
+        elif isinstance(value, (int, float, bool)):
+            payload[key] = value
+    edit_date = getattr(message, "edit_date", None)
+    if edit_date is not None:
+        payload["edit_date"] = _isoformat(edit_date)
     payload.update(_extract_media_summary(message, premium=premium))
     payload.update(_extract_geo_summary(message))
     payload.update(_extract_contact_summary(message))
@@ -625,6 +671,31 @@ def _extract_flood_wait_seconds(exc: BaseException) -> int | None:
     if type(exc).__name__ == "FloodWaitError":
         return int(seconds or 0) or None
     return None
+
+
+def _build_tl_object(
+    factory: Any,
+    *,
+    object_name: str,
+    keep_none: frozenset[str] = frozenset(),
+    **kwargs: Any,
+) -> Any:
+    signature = inspect.signature(factory)
+    parameters = signature.parameters
+    accepts_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+    supported = set(parameters)
+    filtered: dict[str, Any] = {}
+    for key, value in kwargs.items():
+        if value is None and key not in keep_none:
+            continue
+        if accepts_var_kwargs or key in supported:
+            filtered[key] = value
+            continue
+        if value:
+            raise BridgeValidationError(
+                f"{object_name} option '{key}' is not supported by the installed Telethon version."
+            )
+    return factory(**filtered)
 
 
 def _map_telegram_error(exc: BaseException, *, action: str) -> BridgeError:
@@ -855,6 +926,11 @@ class BridgeClient:
         peer: str | int,
         text: str,
         reply_to: int | None = None,
+        silent: bool | None = None,
+        background: bool | None = None,
+        clear_draft: bool | None = None,
+        send_as: str | int | None = None,
+        message_effect_id: int | None = None,
         *,
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
@@ -879,11 +955,22 @@ class BridgeClient:
 
             ids: list[Any] = []
             for chunk in chunks:
+                send_kwargs: dict[str, Any] = {"reply_to": reply_to if not ids else None}
+                if silent is not None:
+                    send_kwargs["silent"] = silent
+                if background is not None:
+                    send_kwargs["background"] = background
+                if clear_draft is not None and not ids:
+                    send_kwargs["clear_draft"] = clear_draft
+                if send_as is not None:
+                    send_kwargs["send_as"] = send_as
+                if message_effect_id is not None:
+                    send_kwargs["message_effect_id"] = message_effect_id
                 result = await self._call_telegram(
                     self._client.send_message,
                     entity,
                     chunk,
-                    reply_to=reply_to if not ids else None,
+                    **send_kwargs,
                     action="send a message",
                     allow_flood_retry=True,
                 )
@@ -958,6 +1045,12 @@ class BridgeClient:
         *,
         caption: str | None = None,
         reply_to: int | None = None,
+        mime_type: str | None = None,
+        silent: bool | None = None,
+        background: bool | None = None,
+        clear_draft: bool | None = None,
+        send_as: str | int | None = None,
+        message_effect_id: int | None = None,
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
@@ -974,12 +1067,27 @@ class BridgeClient:
                 scope=policy.write_scope,
             )
             await self._delay_before_write(policy)
+            send_kwargs: dict[str, Any] = {
+                "caption": caption,
+                "reply_to": reply_to,
+            }
+            if mime_type is not None:
+                send_kwargs["mime_type"] = mime_type
+            if silent is not None:
+                send_kwargs["silent"] = silent
+            if background is not None:
+                send_kwargs["background"] = background
+            if clear_draft is not None:
+                send_kwargs["clear_draft"] = clear_draft
+            if send_as is not None:
+                send_kwargs["send_as"] = send_as
+            if message_effect_id is not None:
+                send_kwargs["message_effect_id"] = message_effect_id
             result = await self._call_telegram(
                 self._client.send_file,
                 entity,
                 file_path,
-                caption=caption,
-                reply_to=reply_to,
+                **send_kwargs,
                 action="send a file",
                 allow_flood_retry=True,
             )
@@ -2141,6 +2249,11 @@ class BridgeClient:
         user_peer: str | int,
         *,
         title: str | None = None,
+        manage_topics: bool | None = None,
+        post_stories: bool | None = None,
+        edit_stories: bool | None = None,
+        delete_stories: bool | None = None,
+        manage_direct_messages: bool | None = None,
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
@@ -2169,7 +2282,9 @@ class BridgeClient:
         if not _is_channel_like(entity):
             raise BridgeValidationError("Admin promotion is supported only for groups, supergroups, and channels.")
         types = _telethon_types()
-        rights = types.ChatAdminRights(
+        rights = _build_tl_object(
+            types.ChatAdminRights,
+            object_name="admin rights",
             change_info=True,
             post_messages=True,
             edit_messages=True,
@@ -2181,6 +2296,11 @@ class BridgeClient:
             anonymous=False,
             manage_call=True,
             other=True,
+            manage_topics=manage_topics,
+            post_stories=post_stories,
+            edit_stories=edit_stories,
+            delete_stories=delete_stories,
+            manage_direct_messages=manage_direct_messages,
         )
         await self._call_telegram(
             self._client.__call__,
@@ -2227,7 +2347,9 @@ class BridgeClient:
         if not _is_channel_like(entity):
             raise BridgeValidationError("Admin demotion is supported only for groups, supergroups, and channels.")
         types = _telethon_types()
-        rights = types.ChatAdminRights(
+        rights = _build_tl_object(
+            types.ChatAdminRights,
+            object_name="admin rights",
             change_info=False,
             post_messages=False,
             edit_messages=False,
@@ -2239,6 +2361,11 @@ class BridgeClient:
             anonymous=False,
             manage_call=False,
             other=False,
+            manage_topics=False,
+            post_stories=False,
+            edit_stories=False,
+            delete_stories=False,
+            manage_direct_messages=False,
         )
         await self._call_telegram(
             self._client.__call__,
@@ -2258,6 +2385,14 @@ class BridgeClient:
         user_peer: str | int,
         *,
         until_date: int | None = None,
+        manage_topics: bool | None = None,
+        send_photos: bool | None = None,
+        send_videos: bool | None = None,
+        send_roundvideos: bool | None = None,
+        send_audios: bool | None = None,
+        send_voices: bool | None = None,
+        send_docs: bool | None = None,
+        send_plain: bool | None = None,
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
@@ -2274,7 +2409,10 @@ class BridgeClient:
         self._require_channel_like(entity, action="banning users")
         functions = _telethon_functions()
         types = _telethon_types()
-        rights = types.ChatBannedRights(
+        rights = _build_tl_object(
+            types.ChatBannedRights,
+            object_name="ban rights",
+            keep_none=frozenset({"until_date"}),
             until_date=until_date,
             view_messages=True,
             send_messages=True,
@@ -2288,6 +2426,14 @@ class BridgeClient:
             change_info=True,
             invite_users=True,
             pin_messages=True,
+            manage_topics=True if manage_topics is None else manage_topics,
+            send_photos=True if send_photos is None else send_photos,
+            send_videos=True if send_videos is None else send_videos,
+            send_roundvideos=True if send_roundvideos is None else send_roundvideos,
+            send_audios=True if send_audios is None else send_audios,
+            send_voices=True if send_voices is None else send_voices,
+            send_docs=True if send_docs is None else send_docs,
+            send_plain=True if send_plain is None else send_plain,
         )
         await self._call_telegram(
             self._client.__call__,
@@ -2321,7 +2467,10 @@ class BridgeClient:
         self._require_channel_like(entity, action="unbanning users")
         functions = _telethon_functions()
         types = _telethon_types()
-        rights = types.ChatBannedRights(
+        rights = _build_tl_object(
+            types.ChatBannedRights,
+            object_name="ban rights",
+            keep_none=frozenset({"until_date"}),
             until_date=None,
             view_messages=False,
             send_messages=False,
@@ -2335,6 +2484,14 @@ class BridgeClient:
             change_info=False,
             invite_users=False,
             pin_messages=False,
+            manage_topics=False,
+            send_photos=False,
+            send_videos=False,
+            send_roundvideos=False,
+            send_audios=False,
+            send_voices=False,
+            send_docs=False,
+            send_plain=False,
         )
         await self._call_telegram(
             self._client.__call__,
@@ -2511,17 +2668,18 @@ class BridgeClient:
         self,
         peer: str | int,
         message_id: int,
-        emoji: str,
+        emoji: str | None = None,
         *,
+        reaction: str | None = None,
         big: bool = False,
         policy_overrides: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
         if message_id < 1:
             raise BridgeValidationError("message_id must be >= 1.")
-        emoji = (emoji or "").strip()
-        if not emoji:
-            raise BridgeValidationError("emoji is required.")
+        reaction_value = (reaction or emoji or "").strip()
+        if not reaction_value:
+            raise BridgeValidationError("reaction is required.")
         async with self._send_lock:
             entity, _ = await self._resolve_scoped_entity(
                 peer,
@@ -2542,7 +2700,7 @@ class BridgeClient:
                     peer=input_peer,
                     msg_id=message_id,
                     big=big,
-                    reaction=[types.ReactionEmoji(emoticon=emoji)],
+                    reaction=[_build_reaction(reaction_value, types)],
                 ),
                 action="send a reaction",
                 allow_flood_retry=True,

@@ -55,6 +55,7 @@ The isolation boundary is **not** the Telegram account. It is the combination of
 <summary>Full feature list</summary>
 
 - Multiple isolated policy profiles on top of one Telegram session.
+- Telethon baseline pinned to `>=1.43.2,<1.44` so the bridge runs on the current 1.43.x MTProto schema line.
 - Separate **read** and **write** scopes per profile.
 - **Write denied by default** if no explicit write allowlist is configured.
 - Conservative `FloodWait` handling:
@@ -67,7 +68,9 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `list_topics(peer)` for Telegram forum chats
   - `get_messages(peer, topic_id=...)` for one specific forum thread
 - Richer interactive actions:
+  - `send_message` with optional `silent`, `background`, `clear_draft`, `send_as`, and `message_effect_id`
   - `send_file`
+    - optional `mime_type`, `silent`, `background`, `clear_draft`, `send_as`, and `message_effect_id`
   - `send_voice`
   - `transcribe_voice` (Telegram Premium speech recognition for voice notes and video circles)
   - `send_sticker`
@@ -102,10 +105,13 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `search_public_chats`
   - `get_recent_actions` for supergroups/channels
   - `get_pinned_messages`
-  - `send_reaction`
+  - `send_reaction` for normal emoji, custom emoji reactions (`custom:<document_id>`), and paid reactions when the account/chat supports them
   - `remove_reaction`
   - `get_message_reactions`
   - `leave_chat`
+- Newer permission fields:
+  - `promote_admin` can set `manage_topics`, story rights, and `manage_direct_messages` when Telethon/Telegram supports them.
+  - `ban_user` sets granular media restrictions such as `send_photos`, `send_videos`, `send_voices`, `send_docs`, and `send_plain`.
 - Messages exceeding 4096 characters are automatically split at logical boundaries (paragraph → newline → sentence → word) and sent sequentially, up to 20 parts (~82 000 characters). The `send_message` response includes `message_ids` with all created ids in addition to `message_id` for the first one. Texts that would require more than 20 parts return a 400 validation error.
 - Message reads are returned in ascending order (`oldest -> newest`) for safer checkpoint updates.
 - Richer message metadata for summaries:
@@ -128,6 +134,15 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - `contact_user_id`
   - `contact_vcard` (truncated to 512 chars)
   - `latitude` / `longitude`
+  - `message_effect_id`
+  - `quick_reply_shortcut_id`
+  - `paid_message_stars`
+  - `post_author`
+  - `via_bot_id`
+  - `views` / `forwards`
+  - `ttl_period`
+  - `noforwards` / `invert_media`
+  - `edit_date`
 - Auto-discovery of sourceable dialogs for `sources_ro`:
   - channels
   - groups
@@ -145,6 +160,16 @@ The isolation boundary is **not** the Telegram account. It is the combination of
   - direct replies back to the same Telegram sender
 
 </details>
+
+### Compatibility backlog
+
+This bridge intentionally does **not** claim full Bot API or full Telegram client coverage. The current implemented surface is focused on practical user-account MTProto operations. The following newer Telegram areas are tracked as backlog until we verify Telethon user-session behavior and design a safe policy model:
+
+- managed bots and bot-only Bot API flows;
+- Telegram Business automation surfaces;
+- gifts, stars, paid media, suggested posts, and monetization workflows;
+- full story publishing/management flows;
+- full checklist creation/editing flows.
 
 ## DM isolation model
 

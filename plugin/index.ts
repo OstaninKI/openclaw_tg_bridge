@@ -109,6 +109,45 @@ function toolResult(text: string): ToolContent {
   return { content: [{ type: "text" as const, text }] };
 }
 
+function formatScalarTag(message: Record<string, unknown>, key: string, label: string): string | null {
+  const value = message[key];
+  if (typeof value === "string" && value.trim()) return `${label}:${value.trim()}`;
+  if (typeof value === "number" && Number.isFinite(value)) return `${label}:${value}`;
+  if (typeof value === "boolean") return value ? label : null;
+  return null;
+}
+
+function formatTelegramMessageParts(
+  message: Record<string, unknown>,
+  options: { includeDirection?: boolean; includeSenderId?: boolean } = {}
+): string[] {
+  return [
+    typeof message.id !== "undefined" ? `id:${message.id}` : null,
+    options.includeDirection ? `[${message.out ? "out" : "in"}]` : null,
+    typeof message.sender_name === "string" && message.sender_name
+      ? message.sender_name
+      : options.includeSenderId && message.sender_id
+        ? `sender:${message.sender_id}`
+        : null,
+    typeof message.date === "string" && message.date ? message.date : null,
+    message.topic_id ? `topic:${message.topic_id}` : null,
+    message.reply_to_message_id ? `reply_to:${message.reply_to_message_id}` : null,
+    message.has_media ? `media:${message.media_type ?? "yes"}` : null,
+    message.latitude && message.longitude ? `geo:${message.latitude},${message.longitude}` : null,
+    formatScalarTag(message, "message_effect_id", "effect"),
+    formatScalarTag(message, "quick_reply_shortcut_id", "quick_reply"),
+    formatScalarTag(message, "paid_message_stars", "stars"),
+    formatScalarTag(message, "post_author", "author"),
+    formatScalarTag(message, "via_bot_id", "via_bot"),
+    formatScalarTag(message, "views", "views"),
+    formatScalarTag(message, "forwards", "forwards"),
+    formatScalarTag(message, "ttl_period", "ttl"),
+    formatScalarTag(message, "noforwards", "noforwards"),
+    formatScalarTag(message, "invert_media", "invert_media"),
+    typeof message.edit_date === "string" && message.edit_date ? `edited:${message.edit_date}` : null,
+  ].filter((part): part is string => Boolean(part));
+}
+
 function serializePeerList(values: string[] | undefined, fallbackForEmpty: string | null): string | undefined {
   if (values === undefined) return undefined;
   if (values.length === 0) return fallbackForEmpty ?? undefined;
@@ -1463,14 +1502,36 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           }),
           text: Type.String({ minLength: 1, description: "Message text. Messages longer than 4096 chars are auto-split at logical boundaries (paragraph → sentence → word) up to 20 parts (~82K chars total). Larger texts must be trimmed or chunked manually before calling this tool." }),
           reply_to: Type.Optional(Type.Number({ description: "Message id to reply to" })),
+          silent: Type.Optional(Type.Boolean({ description: "Send without a notification sound where Telegram supports it" })),
+          background: Type.Optional(Type.Boolean({ description: "Send in background where Telegram supports it" })),
+          clear_draft: Type.Optional(Type.Boolean({ description: "Clear the Telegram draft for this peer" })),
+          send_as: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "Optional chat/channel identity to send as" })),
+          message_effect_id: Type.Optional(Type.Number({ minimum: 1, description: "Optional Telegram message effect id" })),
         }),
-        async execute(_id: string, params: { peer: string | number; text: string; reply_to?: number }) {
+        async execute(
+          _id: string,
+          params: {
+            peer: string | number;
+            text: string;
+            reply_to?: number;
+            silent?: boolean;
+            background?: boolean;
+            clear_draft?: boolean;
+            send_as?: string | number;
+            message_effect_id?: number;
+          }
+        ) {
           const res = await fetchBridge(api, profile, "/send_message", {
             method: "POST",
             body: JSON.stringify({
               peer: params.peer,
               text: params.text,
               reply_to: params.reply_to ?? null,
+              silent: params.silent ?? null,
+              background: params.background ?? null,
+              clear_draft: params.clear_draft ?? null,
+              send_as: params.send_as ?? null,
+              message_effect_id: params.message_effect_id ?? null,
             }),
           });
           if (!res.ok) {
@@ -1497,10 +1558,27 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             file_path: Type.String({ minLength: 1, description: "Absolute or backend-local file path" }),
             caption: Type.Optional(Type.String({ description: "Optional caption" })),
             reply_to: Type.Optional(Type.Number({ description: "Message id to reply to" })),
+            mime_type: Type.Optional(Type.String({ description: "Optional MIME type override" })),
+            silent: Type.Optional(Type.Boolean({ description: "Send without a notification sound where Telegram supports it" })),
+            background: Type.Optional(Type.Boolean({ description: "Send in background where Telegram supports it" })),
+            clear_draft: Type.Optional(Type.Boolean({ description: "Clear the Telegram draft for this peer" })),
+            send_as: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "Optional chat/channel identity to send as" })),
+            message_effect_id: Type.Optional(Type.Number({ minimum: 1, description: "Optional Telegram message effect id" })),
           }),
           async execute(
             _id: string,
-            params: { peer: string | number; file_path: string; caption?: string; reply_to?: number }
+            params: {
+              peer: string | number;
+              file_path: string;
+              caption?: string;
+              reply_to?: number;
+              mime_type?: string;
+              silent?: boolean;
+              background?: boolean;
+              clear_draft?: boolean;
+              send_as?: string | number;
+              message_effect_id?: number;
+            }
           ) {
             const res = await fetchBridge(api, profile, "/send_file", {
               method: "POST",
@@ -1509,6 +1587,12 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
                 file_path: params.file_path,
                 caption: params.caption ?? null,
                 reply_to: params.reply_to ?? null,
+                mime_type: params.mime_type ?? null,
+                silent: params.silent ?? null,
+                background: params.background ?? null,
+                clear_draft: params.clear_draft ?? null,
+                send_as: params.send_as ?? null,
+                message_effect_id: params.message_effect_id ?? null,
               }),
             });
             if (!res.ok) {
@@ -2088,14 +2172,36 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           }),
           user_peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
           title: Type.Optional(Type.String()),
+          manage_topics: Type.Optional(Type.Boolean({ description: "Allow managing forum topics" })),
+          post_stories: Type.Optional(Type.Boolean({ description: "Allow posting stories where Telegram supports it" })),
+          edit_stories: Type.Optional(Type.Boolean({ description: "Allow editing stories where Telegram supports it" })),
+          delete_stories: Type.Optional(Type.Boolean({ description: "Allow deleting stories where Telegram supports it" })),
+          manage_direct_messages: Type.Optional(Type.Boolean({ description: "Allow managing channel direct messages where Telegram supports it" })),
         }),
-        async execute(_id: string, params: { peer: string | number; user_peer: string | number; title?: string }) {
+        async execute(
+          _id: string,
+          params: {
+            peer: string | number;
+            user_peer: string | number;
+            title?: string;
+            manage_topics?: boolean;
+            post_stories?: boolean;
+            edit_stories?: boolean;
+            delete_stories?: boolean;
+            manage_direct_messages?: boolean;
+          }
+        ) {
           const res = await fetchBridge(api, profile, "/promote_admin", {
             method: "POST",
             body: JSON.stringify({
               peer: params.peer,
               user_peer: params.user_peer,
               title: params.title ?? null,
+              manage_topics: params.manage_topics ?? null,
+              post_stories: params.post_stories ?? null,
+              edit_stories: params.edit_stories ?? null,
+              delete_stories: params.delete_stories ?? null,
+              manage_direct_messages: params.manage_direct_messages ?? null,
             }),
           });
           if (!res.ok) return toolResult(formatBridgeError(res));
@@ -2138,14 +2244,45 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           peer: Type.Union([Type.String(), Type.Number()], { description: "Supergroup or channel username or id" }),
           user_peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
           until_date: Type.Optional(Type.Number({ description: "Optional unix timestamp until which the ban applies" })),
+          manage_topics: Type.Optional(Type.Boolean({ description: "Restrict managing forum topics" })),
+          send_photos: Type.Optional(Type.Boolean({ description: "Restrict sending photos" })),
+          send_videos: Type.Optional(Type.Boolean({ description: "Restrict sending videos" })),
+          send_roundvideos: Type.Optional(Type.Boolean({ description: "Restrict sending video notes" })),
+          send_audios: Type.Optional(Type.Boolean({ description: "Restrict sending audio files" })),
+          send_voices: Type.Optional(Type.Boolean({ description: "Restrict sending voice notes" })),
+          send_docs: Type.Optional(Type.Boolean({ description: "Restrict sending documents" })),
+          send_plain: Type.Optional(Type.Boolean({ description: "Restrict sending plain text messages" })),
         }),
-        async execute(_id: string, params: { peer: string | number; user_peer: string | number; until_date?: number }) {
+        async execute(
+          _id: string,
+          params: {
+            peer: string | number;
+            user_peer: string | number;
+            until_date?: number;
+            manage_topics?: boolean;
+            send_photos?: boolean;
+            send_videos?: boolean;
+            send_roundvideos?: boolean;
+            send_audios?: boolean;
+            send_voices?: boolean;
+            send_docs?: boolean;
+            send_plain?: boolean;
+          }
+        ) {
           const res = await fetchBridge(api, profile, "/ban_user", {
             method: "POST",
             body: JSON.stringify({
               peer: params.peer,
               user_peer: params.user_peer,
               until_date: params.until_date ?? null,
+              manage_topics: params.manage_topics ?? null,
+              send_photos: params.send_photos ?? null,
+              send_videos: params.send_videos ?? null,
+              send_roundvideos: params.send_roundvideos ?? null,
+              send_audios: params.send_audios ?? null,
+              send_voices: params.send_voices ?? null,
+              send_docs: params.send_docs ?? null,
+              send_plain: params.send_plain ?? null,
             }),
           });
           if (!res.ok) return toolResult(formatBridgeError(res));
@@ -2184,16 +2321,21 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         parameters: Type.Object({
           peer: Type.Union([Type.String(), Type.Number()], { description: "Chat username or id" }),
           message_id: Type.Number({ minimum: 1 }),
-          emoji: Type.String({ minLength: 1 }),
+          emoji: Type.Optional(Type.String({ minLength: 1, description: "Backward-compatible emoji reaction" })),
+          reaction: Type.Optional(Type.String({ minLength: 1, description: "Reaction value: emoji, custom:<document_id>, or paid" })),
           big: Type.Optional(Type.Boolean({ default: false })),
         }),
-        async execute(_id: string, params: { peer: string | number; message_id: number; emoji: string; big?: boolean }) {
+        async execute(
+          _id: string,
+          params: { peer: string | number; message_id: number; emoji?: string; reaction?: string; big?: boolean }
+        ) {
           const res = await fetchBridge(api, profile, "/send_reaction", {
             method: "POST",
             body: JSON.stringify({
               peer: params.peer,
               message_id: params.message_id,
-              emoji: params.emoji,
+              emoji: params.emoji ?? null,
+              reaction: params.reaction ?? null,
               big: params.big ?? false,
             }),
           });
@@ -2349,15 +2491,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           return toolResult(formatBridgeError(res));
         }
         const message = (res.data as Record<string, unknown> | undefined) ?? {};
-        const parts = [
-          typeof message.id === "number" ? `id:${message.id}` : null,
-          typeof message.sender_name === "string" && message.sender_name ? `${message.sender_name}` : null,
-          typeof message.date === "string" && message.date ? message.date : null,
-          message.topic_id ? `topic:${message.topic_id}` : null,
-          message.reply_to_message_id ? `reply_to:${message.reply_to_message_id}` : null,
-          message.has_media ? `media:${message.media_type ?? "yes"}` : null,
-          message.latitude && message.longitude ? `geo:${message.latitude},${message.longitude}` : null,
-        ].filter(Boolean);
+        const parts = formatTelegramMessageParts(message);
         const body = typeof message.text === "string" && message.text ? message.text : "(no text)";
         return toolResult(`${parts.join(" | ")}${parts.length ? " | " : ""}${body}`);
       },
@@ -2393,18 +2527,11 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }
-        const messages =
-          (res.data as {
-            messages?: Array<{ id: unknown; text?: string; sender_name?: string; date?: string; topic_id?: unknown }>;
-          })?.messages ?? [];
+        const messages = (res.data as { messages?: Array<Record<string, unknown>> })?.messages ?? [];
         const lines = messages.map((message) => {
-          const parts = [
-            typeof message.id !== "undefined" ? `id:${message.id}` : null,
-            message.sender_name ?? null,
-            message.topic_id ? `topic:${message.topic_id}` : null,
-            message.date ?? null,
-          ].filter(Boolean);
-          return `${parts.join(" | ")}${parts.length ? " | " : ""}${message.text || "(no text)"}`;
+          const parts = formatTelegramMessageParts(message);
+          const body = typeof message.text === "string" && message.text ? message.text : "(no text)";
+          return `${parts.join(" | ")}${parts.length ? " | " : ""}${body}`;
         });
         return toolResult(lines.length ? lines.join("\n") : "No messages found.");
       },
@@ -2699,14 +2826,12 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         const limit = Math.min(100, Math.max(1, params.limit ?? 50));
         const res = await fetchBridge(api, profile, `/history?peer=${peer}&limit=${limit}`);
         if (!res.ok) return toolResult(formatBridgeError(res));
-        const messages =
-          (res.data as { messages?: Array<{ id?: unknown; text?: string; sender_name?: string; date?: string }> } | undefined)
-            ?.messages ?? [];
-        const lines = messages.map((message) =>
-          `id:${message.id}${message.sender_name ? ` | ${message.sender_name}` : ""}${message.date ? ` | ${message.date}` : ""}${
-            message.text ? ` | ${message.text}` : ""
-          }`
-        );
+        const messages = (res.data as { messages?: Array<Record<string, unknown>> } | undefined)?.messages ?? [];
+        const lines = messages.map((message) => {
+          const parts = formatTelegramMessageParts(message);
+          const body = typeof message.text === "string" && message.text ? message.text : "(no text)";
+          return `${parts.join(" | ")}${parts.length ? " | " : ""}${body}`;
+        });
         return toolResult(lines.length ? lines.join("\n") : "No history.");
       },
     },
@@ -2963,29 +3088,11 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }
-        const messages =
-          (res.data as {
-            messages?: Array<{
-              id: unknown;
-              text: string;
-              date?: string;
-              out?: boolean;
-              sender_name?: string;
-              sender_id?: unknown;
-              topic_id?: unknown;
-              reply_to_message_id?: unknown;
-            }>;
-          })?.messages ?? [];
+        const messages = (res.data as { messages?: Array<Record<string, unknown>> })?.messages ?? [];
         const lines = messages.map((message) => {
-          const parts = [
-            message.id ? `id:${message.id}` : null,
-            `[${message.out ? "out" : "in"}]`,
-            message.sender_name ? `${message.sender_name}` : message.sender_id ? `sender:${message.sender_id}` : null,
-            message.topic_id ? `topic:${message.topic_id}` : null,
-            message.reply_to_message_id ? `reply_to:${message.reply_to_message_id}` : null,
-            message.date ? `${message.date}` : null,
-          ].filter(Boolean);
-          return `${parts.join(" | ")}${parts.length ? " | " : ""}${message.text || "(no text)"}`;
+          const parts = formatTelegramMessageParts(message, { includeDirection: true, includeSenderId: true });
+          const body = typeof message.text === "string" && message.text ? message.text : "(no text)";
+          return `${parts.join(" | ")}${parts.length ? " | " : ""}${body}`;
         });
         return toolResult(lines.length ? lines.join("\n") : "No messages.");
       },
