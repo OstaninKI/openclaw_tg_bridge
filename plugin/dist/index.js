@@ -1,3 +1,4 @@
+// Generated from index.ts by scripts/build.mjs. Do not edit by hand.
 /**
  * OpenClaw plugin: Unofficial Telegram User Bridge
  * Registers agent tools that call the Telethon HTTP bridge (live user account).
@@ -21,98 +22,98 @@ const HEADER_DENY_FROM = "X-OpenClaw-Deny-From";
 const HEADER_WRITE_TO = "X-OpenClaw-Write-To";
 const HEADER_DENY_WRITE_TO = "X-OpenClaw-Deny-Write-To";
 
-type ToolContent = { content: Array<{ type: "text"; text: string }> };
-type ProfileMode = "interactive" | "sources_ro";
+                                                                      
+                                                
 
-type PolicyHeaderConfig = {
-  policyProfile?: string;
-  replyDelaySec?: number;
-  replyDelayMaxSec?: number;
-  allowFrom?: string[];
-  denyFrom?: string[];
-  writeTo?: string[];
-  denyWriteTo?: string[];
-};
+                           
+                         
+                         
+                            
+                       
+                      
+                     
+                         
+  
 
-type ProfileConfig = PolicyHeaderConfig & {
-  id: string;
-  label: string;
-  mode: ProfileMode;
-  privilegedTools: boolean;
-};
+                                           
+             
+                
+                    
+                           
+  
 
-type PluginConfig = {
-  baseUrl: string;
-  apiToken?: string;
-  timeoutMs: number;
-  profiles: ProfileConfig[];
-};
+                     
+                  
+                    
+                    
+                            
+  
 
-type ChannelAccountConfig = PolicyHeaderConfig & {
-  accountId: string;
-  defaultAccountId: string;
-  enabled: boolean;
-  label: string;
-  baseUrl: string;
-  apiToken?: string;
-  strictPeerBindings: boolean;
-  timeoutMs: number;
-  pollTimeoutMs: number;
-  pollIntervalMs: number;
-  markReadOnInbound: boolean;
-  typingWhileReplying: boolean;
-  typingMaxDurationMs: number;
-};
+                                                  
+                    
+                           
+                   
+                
+                  
+                    
+                              
+                    
+                        
+                         
+                             
+                               
+                              
+  
 
-type DmChannelConfig = {
-  defaultAccountId: string;
-  accounts: ChannelAccountConfig[];
-};
+                        
+                           
+                                   
+  
 
-type BridgeResponse = {
-  ok: boolean;
-  data?: unknown;
-  error?: string;
-  status?: number;
-  retryAfter?: number;
-  needsReauth?: boolean;
-};
+                       
+              
+                 
+                 
+                  
+                      
+                        
+  
 
-type DmInboxEvent = {
-  id: number;
-  text: string;
-  sender_id: string | number;
-  sender_name?: string;
-  sender_username?: string;
-  date?: string;
-  has_media?: boolean;
-  media_type?: string | null;
-  file_name?: string | null;
-  mime_type?: string | null;
-  file_size?: number | null;
-  media_path?: string | null;
-  media_paths?: string[] | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  venue_title?: string | null;
-  venue_address?: string | null;
-  venue_provider?: string | null;
-  venue_id?: string | null;
-  contact_phone?: string | null;
-  contact_first_name?: string | null;
-  contact_last_name?: string | null;
-  contact_user_id?: string | number | null;
-  contact_vcard?: string | null;
-  entities?: Array<{ type?: string; text?: string; url?: string }>;
-  can_transcribe?: boolean | null;
-  reply_to_message_id?: number | null;
-};
+                     
+             
+               
+                             
+                       
+                           
+                
+                      
+                             
+                            
+                            
+                            
+                             
+                                
+                           
+                            
+                              
+                                
+                                 
+                           
+                                
+                                     
+                                    
+                                           
+                                
+                                                                   
+                                  
+                                      
+  
 
-function toolResult(text: string): ToolContent {
-  return { content: [{ type: "text" as const, text }] };
+function toolResult(text        )              {
+  return { content: [{ type: "text"         , text }] };
 }
 
-function formatScalarTag(message: Record<string, unknown>, key: string, label: string): string | null {
+function formatScalarTag(message                         , key        , label        )                {
   const value = message[key];
   if (typeof value === "string" && value.trim()) return `${label}:${value.trim()}`;
   if (typeof value === "number" && Number.isFinite(value)) return `${label}:${value}`;
@@ -121,9 +122,9 @@ function formatScalarTag(message: Record<string, unknown>, key: string, label: s
 }
 
 function formatTelegramMessageParts(
-  message: Record<string, unknown>,
-  options: { includeDirection?: boolean; includeSenderId?: boolean } = {}
-): string[] {
+  message                         ,
+  options                                                            = {}
+)           {
   return [
     typeof message.id !== "undefined" ? `id:${message.id}` : null,
     options.includeDirection ? `[${message.out ? "out" : "in"}]` : null,
@@ -148,21 +149,21 @@ function formatTelegramMessageParts(
     formatScalarTag(message, "noforwards", "noforwards"),
     formatScalarTag(message, "invert_media", "invert_media"),
     typeof message.edit_date === "string" && message.edit_date ? `edited:${message.edit_date}` : null,
-  ].filter((part): part is string => Boolean(part));
+  ].filter((part)                 => Boolean(part));
 }
 
-function serializePeerList(values: string[] | undefined, fallbackForEmpty: string | null): string | undefined {
+function serializePeerList(values                      , fallbackForEmpty               )                     {
   if (values === undefined) return undefined;
   if (values.length === 0) return fallbackForEmpty ?? undefined;
   return values.join(",");
 }
 
-function slugifyToolId(value: string): string {
+function slugifyToolId(value        )         {
   const slug = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return slug || "profile";
 }
 
-function resolveOwnerCompatAliasSlug(profile: ProfileConfig, existingSlugs: Set<string>): string | null {
+function resolveOwnerCompatAliasSlug(profile               , existingSlugs             )                {
   if (!isOwnerProfile(profile)) return null;
   const primary = slugifyToolId(profile.id);
   if (primary === "owner" && !existingSlugs.has("owner_dm")) return "owner_dm";
@@ -170,9 +171,9 @@ function resolveOwnerCompatAliasSlug(profile: ProfileConfig, existingSlugs: Set<
   return null;
 }
 
-function collectProfileToolPrefixes(profiles: ProfileConfig[]): string[] {
+function collectProfileToolPrefixes(profiles                 )           {
   const slugs = new Set(profiles.map((profile) => slugifyToolId(profile.id)));
-  const prefixes = new Set<string>();
+  const prefixes = new Set        ();
   for (const profile of profiles) {
     prefixes.add(`telegram_${slugifyToolId(profile.id)}`);
     const ownerCompatAlias = resolveOwnerCompatAliasSlug(profile, slugs);
@@ -183,9 +184,9 @@ function collectProfileToolPrefixes(profiles: ProfileConfig[]): string[] {
   return Array.from(prefixes);
 }
 
-function extractRuntimeType(runtime: unknown): string | null {
+function extractRuntimeType(runtime         )                {
   if (!runtime || typeof runtime !== "object") return null;
-  const value = runtime as Record<string, unknown>;
+  const value = runtime                           ;
   if (typeof value.type === "string" && value.type.trim()) {
     return value.type.trim().toLowerCase();
   }
@@ -195,24 +196,24 @@ function extractRuntimeType(runtime: unknown): string | null {
   return null;
 }
 
-function resolveConfiguredAgentRuntimeType(cfg: Record<string, unknown>, agentId: string): string | null {
-  const agents = cfg.agents as Record<string, unknown> | undefined;
-  const defaults = (agents?.defaults as Record<string, unknown> | undefined)?.runtime;
-  const list = (agents?.list as Array<unknown> | undefined) ?? [];
+function resolveConfiguredAgentRuntimeType(cfg                         , agentId        )                {
+  const agents = cfg.agents                                       ;
+  const defaults = (agents?.defaults                                       )?.runtime;
+  const list = (agents?.list                              ) ?? [];
   const agent = list.find(
-    (item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string" &&
-      ((item as Record<string, unknown>).id as string).trim() === agentId
-  ) as Record<string, unknown> | undefined;
+    (item) => item && typeof item === "object" && typeof (item                           ).id === "string" &&
+      ((item                           ).id          ).trim() === agentId
+  )                                       ;
   const explicit = extractRuntimeType(agent?.runtime);
   if (explicit) return explicit;
   return extractRuntimeType(defaults);
 }
 
-function isOwnerProfile(profile: ProfileConfig): boolean {
+function isOwnerProfile(profile               )          {
   return /^owner(?:$|[_-])/i.test(profile.id.trim());
 }
 
-function normalizeProfile(raw: Record<string, unknown>, fallbackId: string): ProfileConfig | null {
+function normalizeProfile(raw                         , fallbackId        )                       {
   const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : fallbackId;
   if (raw.enabled === false) return null;
   const mode = raw.mode === "sources_ro" ? "sources_ro" : "interactive";
@@ -225,23 +226,23 @@ function normalizeProfile(raw: Record<string, unknown>, fallbackId: string): Pro
       typeof raw.policyProfile === "string" && raw.policyProfile.trim() ? raw.policyProfile.trim() : undefined,
     replyDelaySec: typeof raw.replyDelaySec === "number" ? raw.replyDelaySec : undefined,
     replyDelayMaxSec: typeof raw.replyDelayMaxSec === "number" ? raw.replyDelayMaxSec : undefined,
-    allowFrom: Array.isArray(raw.allowFrom) ? (raw.allowFrom as string[]) : undefined,
-    denyFrom: Array.isArray(raw.denyFrom) ? (raw.denyFrom as string[]) : undefined,
-    writeTo: Array.isArray(raw.writeTo) ? (raw.writeTo as string[]) : undefined,
-    denyWriteTo: Array.isArray(raw.denyWriteTo) ? (raw.denyWriteTo as string[]) : undefined,
+    allowFrom: Array.isArray(raw.allowFrom) ? (raw.allowFrom            ) : undefined,
+    denyFrom: Array.isArray(raw.denyFrom) ? (raw.denyFrom            ) : undefined,
+    writeTo: Array.isArray(raw.writeTo) ? (raw.writeTo            ) : undefined,
+    denyWriteTo: Array.isArray(raw.denyWriteTo) ? (raw.denyWriteTo            ) : undefined,
   };
 }
 
-function getConfig(api: { config: Record<string, unknown> }): PluginConfig {
-  const entries = (api.config?.plugins as Record<string, unknown>)?.entries as
-    | Record<string, Record<string, unknown>>
-    | undefined;
-  const cfg = entries?.[CHANNEL_ID]?.config as Record<string, unknown> | undefined;
+function getConfig(api                                     )               {
+  const entries = (api.config?.plugins                           )?.entries   
+                                             
+               ;
+  const cfg = entries?.[CHANNEL_ID]?.config                                       ;
 
-  const rawProfiles = Array.isArray(cfg?.profiles) ? (cfg?.profiles as Array<Record<string, unknown>>) : [];
+  const rawProfiles = Array.isArray(cfg?.profiles) ? (cfg?.profiles                                  ) : [];
   const profiles = rawProfiles
     .map((profile, index) => normalizeProfile(profile, `profile_${index + 1}`))
-    .filter((profile): profile is ProfileConfig => profile !== null);
+    .filter((profile)                           => profile !== null);
 
   if (profiles.length === 0) {
     profiles.push({
@@ -250,31 +251,31 @@ function getConfig(api: { config: Record<string, unknown> }): PluginConfig {
       mode: "interactive",
       privilegedTools: true,
       policyProfile:
-        typeof cfg?.policyProfile === "string" && (cfg.policyProfile as string).trim()
-          ? (cfg.policyProfile as string).trim()
+        typeof cfg?.policyProfile === "string" && (cfg.policyProfile          ).trim()
+          ? (cfg.policyProfile          ).trim()
           : undefined,
-      replyDelaySec: typeof cfg?.replyDelaySec === "number" ? (cfg.replyDelaySec as number) : undefined,
-      replyDelayMaxSec: typeof cfg?.replyDelayMaxSec === "number" ? (cfg.replyDelayMaxSec as number) : undefined,
-      allowFrom: Array.isArray(cfg?.allowFrom) ? (cfg.allowFrom as string[]) : undefined,
-      denyFrom: Array.isArray(cfg?.denyFrom) ? (cfg.denyFrom as string[]) : undefined,
-      writeTo: Array.isArray(cfg?.writeTo) ? (cfg.writeTo as string[]) : undefined,
-      denyWriteTo: Array.isArray(cfg?.denyWriteTo) ? (cfg.denyWriteTo as string[]) : undefined,
+      replyDelaySec: typeof cfg?.replyDelaySec === "number" ? (cfg.replyDelaySec          ) : undefined,
+      replyDelayMaxSec: typeof cfg?.replyDelayMaxSec === "number" ? (cfg.replyDelayMaxSec          ) : undefined,
+      allowFrom: Array.isArray(cfg?.allowFrom) ? (cfg.allowFrom            ) : undefined,
+      denyFrom: Array.isArray(cfg?.denyFrom) ? (cfg.denyFrom            ) : undefined,
+      writeTo: Array.isArray(cfg?.writeTo) ? (cfg.writeTo            ) : undefined,
+      denyWriteTo: Array.isArray(cfg?.denyWriteTo) ? (cfg.denyWriteTo            ) : undefined,
     });
   }
 
   return {
-    baseUrl: ((cfg?.baseUrl as string) || "http://127.0.0.1:8765").replace(/\/$/, ""),
-    apiToken: cfg?.apiToken as string | undefined,
-    timeoutMs: (cfg?.timeoutMs as number) || 25000,
+    baseUrl: ((cfg?.baseUrl          ) || "http://127.0.0.1:8765").replace(/\/$/, ""),
+    apiToken: cfg?.apiToken                      ,
+    timeoutMs: (cfg?.timeoutMs          ) || 25000,
     profiles,
   };
 }
 
 function normalizeChannelAccount(
-  raw: Record<string, unknown>,
-  accountId: string,
-  pluginConfig: PluginConfig
-): ChannelAccountConfig {
+  raw                         ,
+  accountId        ,
+  pluginConfig              
+)                       {
   const pollTimeoutMs =
     typeof raw.pollTimeoutMs === "number" && raw.pollTimeoutMs > 0 ? raw.pollTimeoutMs : 25000;
   const timeoutMsRaw =
@@ -305,24 +306,24 @@ function normalizeChannelAccount(
       typeof raw.policyProfile === "string" && raw.policyProfile.trim() ? raw.policyProfile.trim() : undefined,
     replyDelaySec: typeof raw.replyDelaySec === "number" ? raw.replyDelaySec : undefined,
     replyDelayMaxSec: typeof raw.replyDelayMaxSec === "number" ? raw.replyDelayMaxSec : undefined,
-    allowFrom: Array.isArray(raw.allowFrom) ? (raw.allowFrom as string[]) : undefined,
-    denyFrom: Array.isArray(raw.denyFrom) ? (raw.denyFrom as string[]) : undefined,
-    writeTo: Array.isArray(raw.writeTo) ? (raw.writeTo as string[]) : undefined,
-    denyWriteTo: Array.isArray(raw.denyWriteTo) ? (raw.denyWriteTo as string[]) : undefined,
+    allowFrom: Array.isArray(raw.allowFrom) ? (raw.allowFrom            ) : undefined,
+    denyFrom: Array.isArray(raw.denyFrom) ? (raw.denyFrom            ) : undefined,
+    writeTo: Array.isArray(raw.writeTo) ? (raw.writeTo            ) : undefined,
+    denyWriteTo: Array.isArray(raw.denyWriteTo) ? (raw.denyWriteTo            ) : undefined,
   };
 }
 
-function getDmChannelConfig(api: { config: Record<string, unknown> }): DmChannelConfig | null {
+function getDmChannelConfig(api                                     )                         {
   return getDmChannelConfigFromConfig(api.config, getConfig(api));
 }
 
 function getDmChannelConfigFromConfig(
-  config: Record<string, unknown>,
-  pluginConfig: PluginConfig
-): DmChannelConfig | null {
-  const channels = config?.channels as Record<string, unknown> | undefined;
-  const cfg = channels?.[CHANNEL_ID] as Record<string, unknown> | undefined;
-  const rawAccounts = (cfg?.accounts as Record<string, Record<string, unknown>> | undefined) ?? {};
+  config                         ,
+  pluginConfig              
+)                         {
+  const channels = config?.channels                                       ;
+  const cfg = channels?.[CHANNEL_ID]                                       ;
+  const rawAccounts = (cfg?.accounts                                                       ) ?? {};
   const accountIds = Object.keys(rawAccounts);
   if (accountIds.length === 0) {
     return null;
@@ -344,17 +345,17 @@ function getDmChannelConfigFromConfig(
 }
 
 function resolveDmChannelAccount(
-  api: { config: Record<string, unknown> },
-  accountId?: string | null
-): ChannelAccountConfig {
+  api                                     ,
+  accountId                
+)                       {
   return resolveDmChannelAccountFromConfig(api.config, getConfig(api), accountId);
 }
 
 function resolveDmChannelAccountFromConfig(
-  config: Record<string, unknown>,
-  pluginConfig: PluginConfig,
-  accountId?: string | null
-): ChannelAccountConfig {
+  config                         ,
+  pluginConfig              ,
+  accountId                
+)                       {
   const channelConfig = getDmChannelConfigFromConfig(config, pluginConfig);
   if (!channelConfig) {
     return normalizeChannelAccount({}, accountId?.trim() || "default", pluginConfig);
@@ -367,11 +368,11 @@ function resolveDmChannelAccountFromConfig(
 }
 
 function buildHeaders(
-  requestConfig: { apiToken?: string },
-  policyConfig: PolicyHeaderConfig,
-  extraHeaders: Record<string, string> = {}
-): Record<string, string> {
-  const headers: Record<string, string> = { "Content-Type": "application/json", ...extraHeaders };
+  requestConfig                       ,
+  policyConfig                    ,
+  extraHeaders                         = {}
+)                         {
+  const headers                         = { "Content-Type": "application/json", ...extraHeaders };
   if (requestConfig.apiToken) headers["Authorization"] = `Bearer ${requestConfig.apiToken}`;
   if (policyConfig.policyProfile) headers[HEADER_POLICY_PROFILE] = policyConfig.policyProfile;
   if (policyConfig.replyDelaySec !== undefined) headers[HEADER_REPLY_DELAY_SEC] = String(policyConfig.replyDelaySec);
@@ -390,11 +391,11 @@ function buildHeaders(
 }
 
 async function fetchBridgeWithConfig(
-  requestConfig: { baseUrl: string; apiToken?: string; timeoutMs: number },
-  policyConfig: PolicyHeaderConfig,
-  path: string,
-  options: { method?: string; body?: string; headers?: Record<string, string> } = {}
-): Promise<BridgeResponse> {
+  requestConfig                                                           ,
+  policyConfig                    ,
+  path        ,
+  options                                                                       = {}
+)                          {
   const url = `${requestConfig.baseUrl}${path}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), requestConfig.timeoutMs);
@@ -409,7 +410,7 @@ async function fetchBridgeWithConfig(
     clearTimeout(timeout);
 
     const text = await res.text();
-    let data: unknown;
+    let data         ;
     try {
       data = text ? JSON.parse(text) : undefined;
     } catch {
@@ -419,7 +420,7 @@ async function fetchBridgeWithConfig(
     if (!res.ok) {
       const detail =
         typeof data === "object" && data !== null && "detail" in data
-          ? String((data as { detail: unknown }).detail)
+          ? String((data                       ).detail)
           : res.statusText;
       const retryAfterHeader = res.headers.get("retry-after");
       const retryAfter = retryAfterHeader ? Number(retryAfterHeader) : undefined;
@@ -428,7 +429,7 @@ async function fetchBridgeWithConfig(
         typeof data === "object" &&
         data !== null &&
         "needs_reauth" in data &&
-        (data as { needs_reauth: unknown }).needs_reauth === true;
+        (data                             ).needs_reauth === true;
       return {
         ok: false,
         error: detail || `HTTP ${res.status}`,
@@ -450,16 +451,16 @@ async function fetchBridgeWithConfig(
 }
 
 async function fetchBridge(
-  api: { config: Record<string, unknown>; logger?: { warn: (s: string) => void } },
-  profile: ProfileConfig,
-  path: string,
-  options: { method?: string; body?: string; headers?: Record<string, string> } = {}
-): Promise<BridgeResponse> {
+  api                                                                             ,
+  profile               ,
+  path        ,
+  options                                                                       = {}
+)                          {
   const config = getConfig(api);
   return fetchBridgeWithConfig(config, profile, path, options);
 }
 
-function formatBridgeError(res: BridgeResponse): string {
+function formatBridgeError(res                )         {
   const detail = (res.error || "").trim();
   if (res.status === 401) {
     return "Telegram bridge rejected plugin credentials. Check apiToken.";
@@ -497,40 +498,40 @@ function formatBridgeError(res: BridgeResponse): string {
   return detail || BRIDGE_UNAVAILABLE;
 }
 
-interface PluginApi {
-  config: Record<string, unknown>;
-  registerTool: (tool: unknown, opts?: { optional?: boolean }) => void;
-  registerChannel?: (options: { plugin: unknown }) => void;
-  runtime?: {
-    channel?: {
-      reply: Record<string, (...args: unknown[]) => unknown>;
-      routing: Record<string, (...args: unknown[]) => unknown>;
-      session: Record<string, (...args: unknown[]) => unknown>;
-    };
-  };
-  logger?: { warn: (s: string) => void };
-}
+                     
+                                  
+                                                                       
+                                                           
+             
+               
+                                                             
+                                                               
+                                                               
+      
+    
+                                         
+ 
 
-type ChannelRuntimeCore = NonNullable<NonNullable<PluginApi["runtime"]>["channel"]>;
+                                                                                    
 
-type GatewayStartContext = {
-  account: ChannelAccountConfig;
-  accountId?: string;
-  cfg: Record<string, unknown>;
-  runtime?: PluginApi["runtime"];
-  channelRuntime?: ChannelRuntimeCore;
-  abortSignal?: AbortSignal;
-  getStatus?: () => unknown;
-  setStatus?: (value: unknown) => void;
-};
+                            
+                                
+                     
+                               
+                                 
+                                      
+                            
+                            
+                                       
+  
 
-function resolveDmScope(cfg: Record<string, unknown>): string {
-  const session = cfg.session as Record<string, unknown> | undefined;
+function resolveDmScope(cfg                         )         {
+  const session = cfg.session                                       ;
   const dmScope = typeof session?.dmScope === "string" ? session.dmScope : undefined;
   return !dmScope || dmScope === "main" ? "per-channel-peer" : dmScope;
 }
 
-function normalizePeerKey(value: unknown): string | null {
+function normalizePeerKey(value         )                {
   if (value === null || value === undefined) return null;
   let normalized = String(value).trim();
   if (!normalized) return null;
@@ -545,9 +546,9 @@ function normalizePeerKey(value: unknown): string | null {
   return normalized.toLowerCase();
 }
 
-function isValidDmInboxEvent(event: unknown): event is DmInboxEvent {
+function isValidDmInboxEvent(event         )                        {
   if (!event || typeof event !== "object") return false;
-  const candidate = event as { id?: unknown; sender_id?: unknown };
+  const candidate = event                                         ;
   if (!Number.isInteger(candidate.id) || Number(candidate.id) <= 0) return false;
   const sender = candidate.sender_id;
   if (typeof sender !== "string" && typeof sender !== "number") return false;
@@ -555,13 +556,13 @@ function isValidDmInboxEvent(event: unknown): event is DmInboxEvent {
   return normalizePeerKey(sender) !== null;
 }
 
-function collectInboundMediaPaths(event: DmInboxEvent): string[] {
+function collectInboundMediaPaths(event              )           {
   const rawPaths = [
     typeof event.media_path === "string" ? event.media_path.trim() : "",
     ...(Array.isArray(event.media_paths) ? event.media_paths.map((item) => String(item).trim()) : []),
-  ].filter((item): item is string => Boolean(item));
-  const deduped: string[] = [];
-  const seen = new Set<string>();
+  ].filter((item)                 => Boolean(item));
+  const deduped           = [];
+  const seen = new Set        ();
   for (const path of rawPaths) {
     if (seen.has(path)) continue;
     seen.add(path);
@@ -570,11 +571,11 @@ function collectInboundMediaPaths(event: DmInboxEvent): string[] {
   return deduped;
 }
 
-function sanitizeInboundDmUserText(text: string): string {
+function sanitizeInboundDmUserText(text        )         {
   return text.replace(/\[Telegram\s/gi, "[TG ");
 }
 
-function sanitizeInboundHintValue(value: unknown): string | null {
+function sanitizeInboundHintValue(value         )                {
   if (value === null || value === undefined) return null;
   const raw = String(value).trim();
   if (!raw) return null;
@@ -588,12 +589,12 @@ function sanitizeInboundHintValue(value: unknown): string | null {
   return sanitized || null;
 }
 
-function buildInboundDmBody(event: DmInboxEvent): string {
+function buildInboundDmBody(event              )         {
   const text = sanitizeInboundDmUserText(event.text?.trim() || "");
   const mediaPaths = collectInboundMediaPaths(event);
   const hasMedia =
     event.has_media === true || Boolean(event.media_type) || Boolean(event.file_name) || mediaPaths.length > 0;
-  const hints: string[] = [];
+  const hints           = [];
   if (typeof event.reply_to_message_id === "number" && event.reply_to_message_id > 0) {
     hints.push(`[Reply to message | id:${event.reply_to_message_id}]`);
   }
@@ -612,7 +613,7 @@ function buildInboundDmBody(event: DmInboxEvent): string {
       const preview = mediaPaths
         .slice(0, 3)
         .map((path) => sanitizeInboundHintValue(path))
-        .filter((value): value is string => Boolean(value))
+        .filter((value)                  => Boolean(value))
         .join(", ");
       const moreSuffix = mediaPaths.length > 3 ? " | more:true" : "";
       if (preview) {
@@ -651,7 +652,7 @@ function buildInboundDmBody(event: DmInboxEvent): string {
     const contactPhone = sanitizeInboundHintValue(event.contact_phone);
     const contactFirstName = sanitizeInboundHintValue(event.contact_first_name);
     const contactLastName = sanitizeInboundHintValue(event.contact_last_name);
-    const contactName = [contactFirstName, contactLastName].filter((value): value is string => Boolean(value)).join(" ");
+    const contactName = [contactFirstName, contactLastName].filter((value)                  => Boolean(value)).join(" ");
     const contactParts = [
       contactPhone ? `phone:${contactPhone}` : null,
       contactName ? `name:${contactName}` : null,
@@ -665,7 +666,7 @@ function buildInboundDmBody(event: DmInboxEvent): string {
     const summarized = entitySamples
       .slice(0, 3)
       .map((entity) => entity?.type || "entity")
-      .filter((item): item is string => Boolean(item));
+      .filter((item)                 => Boolean(item));
     if (summarized.length > 0) {
       const suffix = entitySamples.length > 3 ? " | more:true" : "";
       hints.push(`[Telegram entities | ${summarized.join(",")}${suffix}]`);
@@ -679,14 +680,14 @@ function buildInboundDmBody(event: DmInboxEvent): string {
 }
 
 function resolveConfiguredDmBinding(
-  cfg: Record<string, unknown>,
-  account: ChannelAccountConfig,
-  event: DmInboxEvent
-): { agentId: string; accountId: string } | null {
-  const bindings = Array.isArray(cfg.bindings) ? (cfg.bindings as Array<Record<string, unknown>>) : [];
+  cfg                         ,
+  account                      ,
+  event              
+)                                                {
+  const bindings = Array.isArray(cfg.bindings) ? (cfg.bindings                                  ) : [];
   const senderKeys = new Set(
     [normalizePeerKey(event.sender_id), normalizePeerKey(event.sender_username)].filter(
-      (value): value is string => Boolean(value)
+      (value)                  => Boolean(value)
     )
   );
   if (senderKeys.size === 0) {
@@ -695,8 +696,8 @@ function resolveConfiguredDmBinding(
 
   for (const binding of bindings) {
     const agentId = typeof binding.agentId === "string" && binding.agentId.trim() ? binding.agentId.trim() : null;
-    const match = binding.match as Record<string, unknown> | undefined;
-    const peer = match?.peer as Record<string, unknown> | undefined;
+    const match = binding.match                                       ;
+    const peer = match?.peer                                       ;
     const bindingChannel = typeof match?.channel === "string" ? match.channel.trim() : "";
     const bindingAccountId =
       typeof match?.accountId === "string" && match.accountId.trim() ? match.accountId.trim() : undefined;
@@ -725,16 +726,16 @@ function resolveConfiguredDmBinding(
 }
 
 function collectRelevantDirectBindings(
-  cfg: Record<string, unknown>,
-  account: ChannelAccountConfig
-): Array<{ agentId: string; peerId: string }> {
-  const bindings = Array.isArray(cfg.bindings) ? (cfg.bindings as Array<Record<string, unknown>>) : [];
-  const relevant: Array<{ agentId: string; peerId: string }> = [];
+  cfg                         ,
+  account                      
+)                                             {
+  const bindings = Array.isArray(cfg.bindings) ? (cfg.bindings                                  ) : [];
+  const relevant                                             = [];
 
   for (const binding of bindings) {
     const agentId = typeof binding.agentId === "string" && binding.agentId.trim() ? binding.agentId.trim() : null;
-    const match = binding.match as Record<string, unknown> | undefined;
-    const peer = match?.peer as Record<string, unknown> | undefined;
+    const match = binding.match                                       ;
+    const peer = match?.peer                                       ;
     const bindingChannel = typeof match?.channel === "string" ? match.channel.trim() : "";
     const bindingAccountId =
       typeof match?.accountId === "string" && match.accountId.trim() ? match.accountId.trim() : undefined;
@@ -757,19 +758,19 @@ function collectRelevantDirectBindings(
 }
 
 function validateStrictDmAccountConfig(
-  cfg: Record<string, unknown>,
-  account: ChannelAccountConfig,
-  expectedToolPrefixes: string[]
-): string[] {
+  cfg                         ,
+  account                      ,
+  expectedToolPrefixes          
+)           {
   if (!account.strictPeerBindings) {
     return [];
   }
 
-  const errors: string[] = [];
+  const errors           = [];
   const allowFrom = Array.isArray(account.allowFrom) ? account.allowFrom : [];
   const writeTo = Array.isArray(account.writeTo) ? account.writeTo : [];
-  const allowIds = new Set<string>();
-  const writeIds = new Set<string>();
+  const allowIds = new Set        ();
+  const writeIds = new Set        ();
 
   if (allowFrom.length === 0) {
     errors.push(`account "${account.accountId}": strict mode requires explicit numeric allowFrom list`);
@@ -797,8 +798,8 @@ function validateStrictDmAccountConfig(
   }
 
   const bindings = collectRelevantDirectBindings(cfg, account);
-  const bindingByPeer = new Map<string, string>();
-  const duplicateBindingPeers = new Set<string>();
+  const bindingByPeer = new Map                ();
+  const duplicateBindingPeers = new Set        ();
   for (const binding of bindings) {
     const previous = bindingByPeer.get(binding.peerId);
     if (previous && previous !== binding.agentId) {
@@ -829,16 +830,16 @@ function validateStrictDmAccountConfig(
 
   // Strict DM routing assumes dedicated agents; if an explicit allowlist exists but excludes
   // telegram_* tools, OpenClaw falls back to core tools in-session, which breaks owner actions.
-  const configuredAgents = ((cfg.agents as Record<string, unknown> | undefined)?.list ?? []) as Array<unknown>;
-  const globalToolsConfig = (cfg.tools as Record<string, unknown> | undefined) ?? undefined;
+  const configuredAgents = ((cfg.agents                                       )?.list ?? [])                  ;
+  const globalToolsConfig = (cfg.tools                                       ) ?? undefined;
   const globalToolsProfile =
     typeof globalToolsConfig?.profile === "string" && globalToolsConfig.profile.trim()
       ? globalToolsConfig.profile.trim()
       : null;
-  const byAgentId = new Map<string, Record<string, unknown>>();
+  const byAgentId = new Map                                 ();
   for (const rawAgent of configuredAgents) {
     if (!rawAgent || typeof rawAgent !== "object") continue;
-    const agent = rawAgent as Record<string, unknown>;
+    const agent = rawAgent                           ;
     const agentId = typeof agent.id === "string" ? agent.id.trim() : "";
     if (!agentId) continue;
     byAgentId.set(agentId, agent);
@@ -855,20 +856,20 @@ function validateStrictDmAccountConfig(
     }
     const agent = byAgentId.get(agentId);
     if (!agent) continue;
-    const tools = (agent.tools as Record<string, unknown> | undefined) ?? undefined;
+    const tools = (agent.tools                                       ) ?? undefined;
     if (!tools || !Object.prototype.hasOwnProperty.call(tools, "allow")) continue;
     const allowRaw = tools.allow;
     if (!Array.isArray(allowRaw)) continue;
     const allow = allowRaw
-      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .filter((value)                  => typeof value === "string" && value.trim().length > 0)
       .map((value) => value.trim());
     const alsoAllowRaw = tools.alsoAllow;
     const alsoAllow = Array.isArray(alsoAllowRaw)
       ? alsoAllowRaw
-          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .filter((value)                  => typeof value === "string" && value.trim().length > 0)
           .map((value) => value.trim())
       : [];
-    const matchesTelegramPrefix = (toolName: string): boolean =>
+    const matchesTelegramPrefix = (toolName        )          =>
       expectedToolPrefixes.some((prefix) => toolName === prefix || toolName.startsWith(`${prefix}_`))
     const hasTelegramInAllow = allow.some((toolName) => matchesTelegramPrefix(toolName));
     const hasTelegramInAlsoAllow = alsoAllow.some((toolName) => matchesTelegramPrefix(toolName));
@@ -897,7 +898,7 @@ function validateStrictDmAccountConfig(
   return errors;
 }
 
-function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+function sleepWithAbort(ms        , signal              )                {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
@@ -912,13 +913,13 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-function nextPollBackoffMs(currentMs: number, baseMs: number, maxMs = 30000): number {
+function nextPollBackoffMs(currentMs        , baseMs        , maxMs = 30000)         {
   const normalizedBaseMs = Math.max(250, baseMs);
   const normalizedCurrentMs = Math.max(normalizedBaseMs, currentMs);
   return Math.min(maxMs, normalizedCurrentMs * 2);
 }
 
-function resolvePollFailureDelayMs(response: BridgeResponse, currentMs: number, baseMs: number): number {
+function resolvePollFailureDelayMs(response                , currentMs        , baseMs        )         {
   const fallbackDelayMs = Math.max(Math.max(250, baseMs), currentMs);
   if (typeof response.retryAfter !== "number" || !Number.isFinite(response.retryAfter) || response.retryAfter <= 0) {
     return fallbackDelayMs;
@@ -926,7 +927,7 @@ function resolvePollFailureDelayMs(response: BridgeResponse, currentMs: number, 
   return Math.max(fallbackDelayMs, Math.ceil(response.retryAfter * 1000));
 }
 
-function resolveChannelRuntime(ctx: GatewayStartContext): ChannelRuntimeCore {
+function resolveChannelRuntime(ctx                     )                     {
   const runtime = ctx.channelRuntime ?? ctx.runtime?.channel;
   if (!runtime) {
     throw new Error("OpenClaw channel runtime is not available.");
@@ -934,13 +935,13 @@ function resolveChannelRuntime(ctx: GatewayStartContext): ChannelRuntimeCore {
   return runtime;
 }
 
-function updateGatewayStatus(ctx: GatewayStartContext, patch: Record<string, unknown>): void {
+function updateGatewayStatus(ctx                     , patch                         )       {
   if (typeof ctx.setStatus !== "function") {
     return;
   }
   const current = typeof ctx.getStatus === "function" ? ctx.getStatus() : undefined;
   const currentStatus =
-    current && typeof current === "object" && !Array.isArray(current) ? (current as Record<string, unknown>) : {};
+    current && typeof current === "object" && !Array.isArray(current) ? (current                           ) : {};
   ctx.setStatus({
     ...currentStatus,
     accountId: ctx.account.accountId,
@@ -948,18 +949,18 @@ function updateGatewayStatus(ctx: GatewayStartContext, patch: Record<string, unk
   });
 }
 
-function buildDmTarget(senderId: string | number): string {
+function buildDmTarget(senderId                 )         {
   return `${CHANNEL_ID}:${String(senderId)}`;
 }
 
-function stripDmTargetPrefix(target: unknown): string {
+function stripDmTargetPrefix(target         )         {
   if (typeof target !== "string") {
     return "";
   }
   return target.trim().replace(/^(telegram-user-bridge|tguser|tgdm):/i, "").trim();
 }
 
-function buildDmText(payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] }): string {
+function buildDmText(payload                                                            )         {
   const parts = [
     typeof payload.text === "string" ? payload.text.trim() : "",
     typeof payload.mediaUrl === "string" ? payload.mediaUrl.trim() : "",
@@ -968,9 +969,9 @@ function buildDmText(payload: { text?: string; mediaUrl?: string; mediaUrls?: st
   return parts.join("\n\n");
 }
 
-async function ackInboundDmEvent(account: ChannelAccountConfig, event: DmInboxEvent): Promise<void> {
+async function ackInboundDmEvent(account                      , event              )                {
   const backoffMs = [0, 250, 750, 1500];
-  let lastError: Error | null = null;
+  let lastError               = null;
   let nextDelayMs = 0;
 
   for (let attempt = 0; attempt < backoffMs.length; attempt += 1) {
@@ -1009,7 +1010,7 @@ async function ackInboundDmEvent(account: ChannelAccountConfig, event: DmInboxEv
   throw lastError ?? new Error("Failed to acknowledge inbound DM.");
 }
 
-async function markInboundDmRead(account: ChannelAccountConfig, event: DmInboxEvent): Promise<void> {
+async function markInboundDmRead(account                      , event              )                {
   const response = await fetchBridgeWithConfig(account, account, "/dm/read", {
     method: "POST",
     body: JSON.stringify({
@@ -1023,7 +1024,7 @@ async function markInboundDmRead(account: ChannelAccountConfig, event: DmInboxEv
   }
 }
 
-async function sendInboundDmTyping(account: ChannelAccountConfig, event: DmInboxEvent): Promise<void> {
+async function sendInboundDmTyping(account                      , event              )                {
   const response = await fetchBridgeWithConfig(account, account, "/dm/typing", {
     method: "POST",
     body: JSON.stringify({
@@ -1036,15 +1037,15 @@ async function sendInboundDmTyping(account: ChannelAccountConfig, event: DmInbox
   }
 }
 
-async function startInboundDmTypingLoop(params: {
-  account: ChannelAccountConfig;
-  event: DmInboxEvent;
-  logger?: { warn: (message: string) => void };
-}): Promise<{ stop: () => Promise<void> }> {
+async function startInboundDmTypingLoop(params   
+                                
+                      
+                                               
+ )                                         {
   let stopped = false;
-  let inFlight: Promise<void> | null = null;
-  let intervalTimer: ReturnType<typeof setInterval> | null = null;
-  let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
+  let inFlight                       = null;
+  let intervalTimer                                        = null;
+  let maxDurationTimer                                       = null;
   const tick = async () => {
     if (stopped || inFlight) {
       return;
@@ -1060,7 +1061,7 @@ async function startInboundDmTypingLoop(params: {
   };
 
   await tick();
-  const stopInternal = async (options: { clearMaxDurationTimer?: boolean } = {}) => {
+  const stopInternal = async (options                                      = {}) => {
     const clearMaxDurationTimer = options.clearMaxDurationTimer !== false;
     stopped = true;
     if (intervalTimer !== null) {
@@ -1094,10 +1095,10 @@ async function startInboundDmTypingLoop(params: {
 }
 
 async function deliverInboundDmReply(
-  account: ChannelAccountConfig,
-  senderId: string | number,
-  payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] }
-): Promise<void> {
+  account                      ,
+  senderId                 ,
+  payload                                                            
+)                {
   const text = buildDmText(payload);
   if (!text) return;
   const response = await fetchBridgeWithConfig(account, account, "/send_message", {
@@ -1113,13 +1114,13 @@ async function deliverInboundDmReply(
   }
 }
 
-async function processInboundDmEvent(params: {
-  api: PluginApi;
-  cfg: Record<string, unknown>;
-  account: ChannelAccountConfig;
-  event: DmInboxEvent;
-  channelRuntime: ChannelRuntimeCore;
-}): Promise<"processed" | "skipped"> {
+async function processInboundDmEvent(params   
+                 
+                               
+                                
+                      
+                                     
+ )                                   {
   const core = params.channelRuntime;
   const senderId = String(params.event.sender_id);
   const configuredRoute = resolveConfiguredDmBinding(params.cfg, params.account, params.event);
@@ -1127,11 +1128,11 @@ async function processInboundDmEvent(params: {
     configuredRoute ??
     (params.account.strictPeerBindings
       ? null
-      : (core.routing.resolveAgentRoute as (...args: unknown[]) => {
-          agentId: string;
-          accountId: string;
-          sessionKey: string;
-        })({
+      : (core.routing.resolveAgentRoute                             
+                          
+                            
+                             
+         )({
           cfg: params.cfg,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
@@ -1143,30 +1144,30 @@ async function processInboundDmEvent(params: {
     );
     return "skipped";
   }
-  const storePath = (core.session.resolveStorePath as (...args: unknown[]) => string)(
-    (params.cfg.session as Record<string, unknown> | undefined)?.store,
+  const storePath = (core.session.resolveStorePath                                  )(
+    (params.cfg.session                                       )?.store,
     { agentId: route.agentId }
   );
   const sessionKey = String(
-    (core.routing.buildAgentSessionKey as (...args: unknown[]) => unknown)({
+    (core.routing.buildAgentSessionKey                                   )({
       agentId: route.agentId,
       channel: CHANNEL_ID,
       accountId: route.accountId,
       peer: { kind: "direct", id: senderId },
       dmScope: resolveDmScope(params.cfg),
-      identityLinks: (params.cfg.session as Record<string, unknown> | undefined)?.identityLinks,
+      identityLinks: (params.cfg.session                                       )?.identityLinks,
     })
   ).toLowerCase();
-  const previousTimestamp = (core.session.readSessionUpdatedAt as (...args: unknown[]) => unknown)({
+  const previousTimestamp = (core.session.readSessionUpdatedAt                                   )({
     storePath,
     sessionKey,
   });
-  const envelopeOptions = (core.reply.resolveEnvelopeFormatOptions as (...args: unknown[]) => unknown)(params.cfg);
+  const envelopeOptions = (core.reply.resolveEnvelopeFormatOptions                                   )(params.cfg);
   const rawBody = buildInboundDmBody(params.event);
   const fromLabel =
     params.event.sender_name ||
     (params.event.sender_username ? `@${params.event.sender_username}` : `user:${senderId}`);
-  const body = (core.reply.formatAgentEnvelope as (...args: unknown[]) => string)({
+  const body = (core.reply.formatAgentEnvelope                                  )({
     channel: CHANNEL_LABEL,
     from: fromLabel,
     timestamp: params.event.date ? Date.parse(params.event.date) : Date.now(),
@@ -1177,7 +1178,7 @@ async function processInboundDmEvent(params: {
   const normalizedTarget = buildDmTarget(senderId);
   const mediaPaths = collectInboundMediaPaths(params.event);
   const primaryMediaPath = mediaPaths[0];
-  const ctxPayload = (core.reply.finalizeInboundContext as (...args: unknown[]) => Record<string, unknown>)({
+  const ctxPayload = (core.reply.finalizeInboundContext                                                   )({
     Body: body,
     BodyForAgent: rawBody,
     RawBody: rawBody,
@@ -1233,7 +1234,7 @@ async function processInboundDmEvent(params: {
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: normalizedTarget,
   });
-  await (core.session.recordInboundSession as (...args: unknown[]) => Promise<void>)({
+  await (core.session.recordInboundSession                                         )({
     storePath,
     sessionKey,
     ctx: ctxPayload,
@@ -1244,11 +1245,11 @@ async function processInboundDmEvent(params: {
       to: normalizedTarget,
       accountId: route.accountId,
     },
-    onRecordError: (error: unknown) => {
+    onRecordError: (error         ) => {
       params.api.logger?.warn(`telegram-user-bridge session meta update failed: ${String(error)}`);
     },
   });
-  let typingHandle: { stop: () => Promise<void> } | null = null;
+  let typingHandle                                       = null;
   try {
     if (params.account.markReadOnInbound) {
       try {
@@ -1264,14 +1265,14 @@ async function processInboundDmEvent(params: {
         logger: params.api.logger,
       });
     }
-    await (core.reply.dispatchReplyWithBufferedBlockDispatcher as (...args: unknown[]) => Promise<void>)({
+    await (core.reply.dispatchReplyWithBufferedBlockDispatcher                                         )({
       ctx: ctxPayload,
       cfg: params.cfg,
       dispatcherOptions: {
-        deliver: async (payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] }) => {
+        deliver: async (payload                                                            ) => {
           await deliverInboundDmReply(params.account, senderId, payload);
         },
-        onError: (error: unknown) => {
+        onError: (error         ) => {
           params.api.logger?.warn(`telegram-user-bridge DM reply failed: ${String(error)}`);
         },
       },
@@ -1283,16 +1284,16 @@ async function processInboundDmEvent(params: {
   return "processed";
 }
 
-async function startDmChannelMonitor(params: {
-  api: PluginApi;
-  cfg: Record<string, unknown>;
-  account: ChannelAccountConfig;
-  channelRuntime: ChannelRuntimeCore;
-  abortSignal?: AbortSignal;
-  statusContext?: GatewayStartContext;
-}): Promise<{ stop: () => Promise<void>; done: Promise<void> }> {
+async function startDmChannelMonitor(params   
+                 
+                               
+                                
+                                     
+                            
+                                      
+ )                                                              {
   let stopped = false;
-  let stopPromise: Promise<void> | null = null;
+  let stopPromise                       = null;
   const basePollDelayMs = Math.max(250, params.account.pollIntervalMs);
   let failureDelayMs = basePollDelayMs;
   const loop = (async () => {
@@ -1322,7 +1323,7 @@ async function startDmChannelMonitor(params: {
         lastError: null,
         retryInMs: 0,
       });
-      const rawEvents = (response.data as { events?: unknown[] } | undefined)?.events ?? [];
+      const rawEvents = (response.data                                      )?.events ?? [];
       const events = rawEvents.filter(isValidDmInboxEvent);
       if (events.length !== rawEvents.length) {
         params.api.logger?.warn("telegram-user-bridge DM poll returned malformed events; skipping invalid entries");
@@ -1369,7 +1370,7 @@ async function startDmChannelMonitor(params: {
         mode: "stopped",
         connected: false,
       });
-      stopPromise ??= new Promise<void>((resolve) => {
+      stopPromise ??= new Promise      ((resolve) => {
         const timer = setTimeout(resolve, params.account.timeoutMs);
         loop.then(
           () => {
@@ -1387,12 +1388,12 @@ async function startDmChannelMonitor(params: {
   };
 }
 
-function registerDmChannel(api: PluginApi): void {
+function registerDmChannel(api           )       {
   if (typeof api.registerChannel !== "function") {
     return;
   }
   const pluginConfig = getConfig(api);
-  const runningAccounts = new Map<string, { stop: () => Promise<void>; done: Promise<void> }>();
+  const runningAccounts = new Map                                                            ();
   const plugin = {
     id: CHANNEL_ID,
     meta: {
@@ -1413,13 +1414,13 @@ function registerDmChannel(api: PluginApi): void {
     },
     reload: { configPrefixes: [`channels.${CHANNEL_ID}`, `plugins.entries.${CHANNEL_ID}`] },
     config: {
-      listAccountIds: (cfg: Record<string, unknown>) =>
+      listAccountIds: (cfg                         ) =>
         getDmChannelConfigFromConfig(cfg, pluginConfig)?.accounts.map((account) => account.accountId) ?? [],
-      resolveAccount: (cfg: Record<string, unknown>, accountId?: string) =>
+      resolveAccount: (cfg                         , accountId         ) =>
         resolveDmChannelAccountFromConfig(cfg, pluginConfig, accountId),
-      defaultAccountId: (cfg: Record<string, unknown>) =>
+      defaultAccountId: (cfg                         ) =>
         getDmChannelConfigFromConfig(cfg, pluginConfig)?.defaultAccountId ?? "default",
-      inspectAccount: (cfg: Record<string, unknown>, accountId?: string) => {
+      inspectAccount: (cfg                         , accountId         ) => {
         const channelConfig = getDmChannelConfigFromConfig(cfg, pluginConfig);
         const account = resolveDmChannelAccountFromConfig(cfg, pluginConfig, accountId);
         return {
@@ -1450,12 +1451,12 @@ function registerDmChannel(api: PluginApi): void {
         text,
         accountId,
         cfg,
-      }: {
-        to: string;
-        text: string;
-        accountId?: string;
-        cfg: Record<string, unknown>;
-      }) => {
+      }   
+                   
+                     
+                           
+                                     
+       ) => {
         const account = resolveDmChannelAccountFromConfig(cfg, pluginConfig, accountId);
         const peer = stripDmTargetPrefix(to);
         if (!peer) {
@@ -1468,12 +1469,12 @@ function registerDmChannel(api: PluginApi): void {
         if (!response.ok) {
           throw new Error(formatBridgeError(response));
         }
-        const messageId = (response.data as { message_id?: unknown } | undefined)?.message_id;
+        const messageId = (response.data                                        )?.message_id;
         return { ok: true, channel: CHANNEL_ID, messageId };
       },
     },
     gateway: {
-      startAccount: async (ctx: GatewayStartContext) => {
+      startAccount: async (ctx                     ) => {
         const validationErrors = validateStrictDmAccountConfig(
           ctx.cfg,
           ctx.account,
@@ -1515,7 +1516,7 @@ function registerDmChannel(api: PluginApi): void {
         }
         return returnedHandle;
       },
-      stopAccount: async (ctx: GatewayStartContext) => {
+      stopAccount: async (ctx                     ) => {
         const current = runningAccounts.get(ctx.account.accountId);
         if (!current) {
           updateGatewayStatus(ctx, { mode: "stopped", connected: false });
@@ -1530,7 +1531,7 @@ function registerDmChannel(api: PluginApi): void {
   api.registerChannel({ plugin });
 }
 
-function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOverride?: string): void {
+function registerProfileTools(api           , profile               , prefixOverride         )       {
   const prefix = prefixOverride ?? `telegram_${slugifyToolId(profile.id)}`;
   const profileLabel = profile.label;
   const optional = { optional: true };
@@ -1560,17 +1561,17 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           message_effect_id: Type.Optional(Type.Number({ minimum: 1, description: "Optional Telegram message effect id" })),
         }),
         async execute(
-          _id: string,
-          params: {
-            peer: string | number;
-            text: string;
-            reply_to?: number;
-            silent?: boolean;
-            background?: boolean;
-            clear_draft?: boolean;
-            send_as?: string | number;
-            message_effect_id?: number;
-          }
+          _id        ,
+          params   
+                                  
+                         
+                              
+                             
+                                 
+                                  
+                                      
+                                       
+           
         ) {
           const res = await fetchBridge(api, profile, "/send_message", {
             method: "POST",
@@ -1588,7 +1589,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           if (!res.ok) {
             return toolResult(formatBridgeError(res));
           }
-          const messageId = (res.data as { message_id?: unknown } | undefined)?.message_id;
+          const messageId = (res.data                                        )?.message_id;
           return toolResult(messageId ? `Message sent (id: ${messageId}).` : "Message sent.");
         },
       },
@@ -1617,19 +1618,19 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             message_effect_id: Type.Optional(Type.Number({ minimum: 1, description: "Optional Telegram message effect id" })),
           }),
           async execute(
-            _id: string,
-            params: {
-              peer: string | number;
-              file_path: string;
-              caption?: string;
-              reply_to?: number;
-              mime_type?: string;
-              silent?: boolean;
-              background?: boolean;
-              clear_draft?: boolean;
-              send_as?: string | number;
-              message_effect_id?: number;
-            }
+            _id        ,
+            params   
+                                    
+                                
+                               
+                                
+                                 
+                               
+                                   
+                                    
+                                        
+                                         
+             
           ) {
             const res = await fetchBridge(api, profile, "/send_file", {
               method: "POST",
@@ -1649,7 +1650,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             if (!res.ok) {
               return toolResult(formatBridgeError(res));
             }
-            const messageId = (res.data as { message_id?: unknown } | undefined)?.message_id;
+            const messageId = (res.data                                        )?.message_id;
             return toolResult(messageId ? `File sent (id: ${messageId}).` : "File sent.");
           },
         },
@@ -1670,7 +1671,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           latitude: Type.Number({ minimum: -90, maximum: 90 }),
           longitude: Type.Number({ minimum: -180, maximum: 180 }),
         }),
-        async execute(_id: string, params: { peer: string | number; latitude: number; longitude: number }) {
+        async execute(_id        , params                                                                ) {
           const res = await fetchBridge(api, profile, "/send_location", {
             method: "POST",
             body: JSON.stringify(params),
@@ -1678,7 +1679,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           if (!res.ok) {
             return toolResult(formatBridgeError(res));
           }
-          const messageId = (res.data as { message_id?: unknown } | undefined)?.message_id;
+          const messageId = (res.data                                        )?.message_id;
           return toolResult(messageId ? `Location sent (id: ${messageId}).` : "Location sent.");
         },
       },
@@ -1698,7 +1699,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           message_id: Type.Number({ minimum: 1 }),
           text: Type.String({ minLength: 1 }),
         }),
-        async execute(_id: string, params: { peer: string | number; message_id: number; text: string }) {
+        async execute(_id        , params                                                             ) {
           const res = await fetchBridge(api, profile, "/edit_message", {
             method: "POST",
             body: JSON.stringify(params),
@@ -1725,7 +1726,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           message_id: Type.Number({ minimum: 1 }),
           revoke: Type.Optional(Type.Boolean({ default: true })),
         }),
-        async execute(_id: string, params: { peer: string | number; message_id: number; revoke?: boolean }) {
+        async execute(_id        , params                                                                 ) {
           const res = await fetchBridge(api, profile, "/delete_message", {
             method: "POST",
             body: JSON.stringify({
@@ -1754,7 +1755,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           to_peer: Type.Union([Type.String(), Type.Number()], { description: "Destination username or chat id" }),
           message_id: Type.Number({ minimum: 1 }),
         }),
-        async execute(_id: string, params: { from_peer: string | number; to_peer: string | number; message_id: number }) {
+        async execute(_id        , params                                                                              ) {
           const res = await fetchBridge(api, profile, "/forward_message", {
             method: "POST",
             body: JSON.stringify(params),
@@ -1762,7 +1763,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           if (!res.ok) {
             return toolResult(formatBridgeError(res));
           }
-          const messageId = (res.data as { message_id?: unknown } | undefined)?.message_id;
+          const messageId = (res.data                                        )?.message_id;
           return toolResult(messageId ? `Message forwarded (id: ${messageId}).` : "Message forwarded.");
         },
       },
@@ -1779,7 +1780,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           parameters: Type.Object({
             peer: Type.Union([Type.String(), Type.Number()], { description: "Chat username or chat id" }),
           }),
-          async execute(_id: string, params: { peer: string | number }) {
+          async execute(_id        , params                           ) {
             const res = await fetchBridge(api, profile, "/leave_chat", {
               method: "POST",
               body: JSON.stringify(params),
@@ -1804,7 +1805,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             file_path: Type.String({ minLength: 1 }),
             caption: Type.Optional(Type.String()),
           }),
-          async execute(_id: string, params: { peer: string | number; file_path: string; caption?: string }) {
+          async execute(_id        , params                                                                ) {
             const res = await fetchBridge(api, profile, "/send_voice", {
               method: "POST",
               body: JSON.stringify({
@@ -1832,13 +1833,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           peer: Type.Union([Type.String(), Type.Number()], { description: "Username (@name), chat id, or 'me'" }),
           message_id: Type.Number({ minimum: 1, description: "ID of the voice note or video circle message" }),
         }),
-        async execute(_id: string, params: { peer: string | number; message_id: number }) {
+        async execute(_id        , params                                               ) {
           const res = await fetchBridge(api, profile, "/transcribe_voice", {
             method: "POST",
             body: JSON.stringify({ peer: params.peer, message_id: params.message_id }),
           });
           if (!res.ok) return toolResult(formatBridgeError(res));
-          const data = res.data as { ok?: boolean; text?: string; error?: string; pending?: boolean } | undefined;
+          const data = res.data                                                                                  ;
           if (data?.ok === false || data?.error) {
             return toolResult(
               "Transcription unavailable (Telegram Premium required). Use download_media to retrieve the audio file for external STT processing."
@@ -1866,7 +1867,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             peer: Type.Union([Type.String(), Type.Number()], { description: "Username (@name), chat id, or 'me'" }),
             file_path: Type.String({ minLength: 1 }),
           }),
-          async execute(_id: string, params: { peer: string | number; file_path: string }) {
+          async execute(_id        , params                                              ) {
             const res = await fetchBridge(api, profile, "/send_sticker", {
               method: "POST",
               body: JSON.stringify(params),
@@ -1889,7 +1890,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             first_name: Type.String({ minLength: 1 }),
             last_name: Type.Optional(Type.String()),
           }),
-          async execute(_id: string, params: { phone: string; first_name: string; last_name?: string }) {
+          async execute(_id        , params                                                           ) {
             const res = await fetchBridge(api, profile, "/contacts/add", {
               method: "POST",
               body: JSON.stringify({
@@ -1899,7 +1900,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
               }),
             });
             if (!res.ok) return toolResult(formatBridgeError(res));
-            const contact = (res.data as { contact?: Record<string, unknown> } | undefined)?.contact ?? {};
+            const contact = (res.data                                                     )?.contact ?? {};
             return toolResult(`Contact added: ${contact.title || contact.username || contact.id || params.phone}.`);
           },
         },
@@ -1915,7 +1916,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           parameters: Type.Object({
             peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
           }),
-          async execute(_id: string, params: { peer: string | number }) {
+          async execute(_id        , params                           ) {
             const res = await fetchBridge(api, profile, "/contacts/delete", {
               method: "POST",
               body: JSON.stringify(params),
@@ -1936,7 +1937,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           parameters: Type.Object({
             peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
           }),
-          async execute(_id: string, params: { peer: string | number }) {
+          async execute(_id        , params                           ) {
             const res = await fetchBridge(api, profile, "/block_user", {
               method: "POST",
               body: JSON.stringify(params),
@@ -1957,7 +1958,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           parameters: Type.Object({
             peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
           }),
-          async execute(_id: string, params: { peer: string | number }) {
+          async execute(_id        , params                           ) {
             const res = await fetchBridge(api, profile, "/unblock_user", {
               method: "POST",
               body: JSON.stringify(params),
@@ -1979,13 +1980,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             title: Type.String({ minLength: 1 }),
             users: Type.Array(Type.Union([Type.String(), Type.Number()]), { default: [] }),
           }),
-          async execute(_id: string, params: { title: string; users: Array<string | number> }) {
+          async execute(_id        , params                                                  ) {
             const res = await fetchBridge(api, profile, "/create_group", {
               method: "POST",
               body: JSON.stringify(params),
             });
             if (!res.ok) return toolResult(formatBridgeError(res));
-            const chatId = (res.data as { chat_id?: unknown } | undefined)?.chat_id;
+            const chatId = (res.data                                     )?.chat_id;
             return toolResult(chatId ? `Group created (id: ${chatId}).` : "Group created.");
           },
         },
@@ -2003,7 +2004,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             about: Type.Optional(Type.String()),
             megagroup: Type.Optional(Type.Boolean({ default: false })),
           }),
-          async execute(_id: string, params: { title: string; about?: string; megagroup?: boolean }) {
+          async execute(_id        , params                                                        ) {
             const res = await fetchBridge(api, profile, "/create_channel", {
               method: "POST",
               body: JSON.stringify({
@@ -2013,7 +2014,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
               }),
             });
             if (!res.ok) return toolResult(formatBridgeError(res));
-            const chatId = (res.data as { chat_id?: unknown } | undefined)?.chat_id;
+            const chatId = (res.data                                     )?.chat_id;
             return toolResult(chatId ? `Channel created (id: ${chatId}).` : "Channel created.");
           },
         },
@@ -2030,13 +2031,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
             users: Type.Array(Type.Union([Type.String(), Type.Number()]), { minItems: 1 }),
           }),
-          async execute(_id: string, params: { peer: string | number; users: Array<string | number> }) {
+          async execute(_id        , params                                                          ) {
             const res = await fetchBridge(api, profile, "/invite_to_group", {
               method: "POST",
               body: JSON.stringify(params),
             });
             if (!res.ok) return toolResult(formatBridgeError(res));
-            const count = (res.data as { invited_count?: unknown } | undefined)?.invited_count;
+            const count = (res.data                                           )?.invited_count;
             return toolResult(typeof count === "number" ? `Invited ${count} users.` : "Users invited.");
           },
         },
@@ -2054,13 +2055,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           parameters: Type.Object({
             link: Type.String({ minLength: 1 }),
           }),
-          async execute(_id: string, params: { link: string }) {
+          async execute(_id        , params                  ) {
             const res = await fetchBridge(api, profile, "/join_chat_by_link", {
               method: "POST",
               body: JSON.stringify(params),
             });
             if (!res.ok) return toolResult(formatBridgeError(res));
-            const chatId = (res.data as { chat_id?: unknown } | undefined)?.chat_id;
+            const chatId = (res.data                                     )?.chat_id;
             return toolResult(chatId ? `Joined chat (id: ${chatId}).` : "Joined chat.");
           },
         },
@@ -2080,16 +2081,16 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             const res = await fetchBridge(api, profile, "/dialog_folders");
             if (!res.ok) return toolResult(formatBridgeError(res));
             const folders =
-              (res.data as {
-                folders?: Array<{
-                  id?: unknown;
-                  title?: string;
-                  emoticon?: string;
-                  include_peers?: Array<unknown>;
-                  exclude_peers?: Array<unknown>;
-                  pinned_peers?: Array<unknown>;
-                }>;
-              } | undefined)?.folders ?? [];
+              (res.data     
+                                 
+                               
+                                 
+                                    
+                                                 
+                                                 
+                                                
+                   
+                           )?.folders ?? [];
             const lines = folders.map((folder) => {
               const parts = [
                 `id:${folder.id ?? "?"}`,
@@ -2132,23 +2133,23 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             exclude_peers: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Number()]))),
           }),
           async execute(
-            _id: string,
-            params: {
-              folder_id: number;
-              title: string;
-              emoticon?: string;
-              contacts?: boolean;
-              non_contacts?: boolean;
-              groups?: boolean;
-              broadcasts?: boolean;
-              bots?: boolean;
-              exclude_muted?: boolean;
-              exclude_read?: boolean;
-              exclude_archived?: boolean;
-              pinned_peers?: Array<string | number>;
-              include_peers?: Array<string | number>;
-              exclude_peers?: Array<string | number>;
-            }
+            _id        ,
+            params   
+                                
+                            
+                                
+                                 
+                                     
+                               
+                                   
+                             
+                                      
+                                     
+                                         
+                                                    
+                                                     
+                                                     
+             
           ) {
             const res = await fetchBridge(api, profile, "/dialog_folders/upsert", {
               method: "POST",
@@ -2170,7 +2171,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
               }),
             });
             if (!res.ok) return toolResult(formatBridgeError(res));
-            const folderId = (res.data as { folder_id?: unknown } | undefined)?.folder_id;
+            const folderId = (res.data                                       )?.folder_id;
             return toolResult(
               typeof folderId === "number"
                 ? `Dialog folder ${folderId} updated.`
@@ -2192,7 +2193,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           parameters: Type.Object({
             folder_id: Type.Number({ minimum: 2, maximum: 255 }),
           }),
-          async execute(_id: string, params: { folder_id: number }) {
+          async execute(_id        , params                       ) {
             const res = await fetchBridge(api, profile, "/dialog_folders/delete", {
               method: "POST",
               body: JSON.stringify({
@@ -2200,7 +2201,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
               }),
             });
             if (!res.ok) return toolResult(formatBridgeError(res));
-            const folderId = (res.data as { folder_id?: unknown } | undefined)?.folder_id;
+            const folderId = (res.data                                       )?.folder_id;
             return toolResult(
               typeof folderId === "number"
                 ? `Dialog folder ${folderId} deleted.`
@@ -2230,17 +2231,17 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           manage_direct_messages: Type.Optional(Type.Boolean({ description: "Allow managing channel direct messages where Telegram supports it" })),
         }),
         async execute(
-          _id: string,
-          params: {
-            peer: string | number;
-            user_peer: string | number;
-            title?: string;
-            manage_topics?: boolean;
-            post_stories?: boolean;
-            edit_stories?: boolean;
-            delete_stories?: boolean;
-            manage_direct_messages?: boolean;
-          }
+          _id        ,
+          params   
+                                  
+                                       
+                           
+                                    
+                                   
+                                   
+                                     
+                                             
+           
         ) {
           const res = await fetchBridge(api, profile, "/promote_admin", {
             method: "POST",
@@ -2273,7 +2274,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           }),
           user_peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
         }),
-        async execute(_id: string, params: { peer: string | number; user_peer: string | number }) {
+        async execute(_id        , params                                                       ) {
           const res = await fetchBridge(api, profile, "/demote_admin", {
             method: "POST",
             body: JSON.stringify(params),
@@ -2305,20 +2306,20 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           send_plain: Type.Optional(Type.Boolean({ description: "Restrict sending plain text messages" })),
         }),
         async execute(
-          _id: string,
-          params: {
-            peer: string | number;
-            user_peer: string | number;
-            until_date?: number;
-            manage_topics?: boolean;
-            send_photos?: boolean;
-            send_videos?: boolean;
-            send_roundvideos?: boolean;
-            send_audios?: boolean;
-            send_voices?: boolean;
-            send_docs?: boolean;
-            send_plain?: boolean;
-          }
+          _id        ,
+          params   
+                                  
+                                       
+                                
+                                    
+                                  
+                                  
+                                       
+                                  
+                                  
+                                
+                                 
+           
         ) {
           const res = await fetchBridge(api, profile, "/ban_user", {
             method: "POST",
@@ -2353,7 +2354,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           peer: Type.Union([Type.String(), Type.Number()], { description: "Supergroup or channel username or id" }),
           user_peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
         }),
-        async execute(_id: string, params: { peer: string | number; user_peer: string | number }) {
+        async execute(_id        , params                                                       ) {
           const res = await fetchBridge(api, profile, "/unban_user", {
             method: "POST",
             body: JSON.stringify(params),
@@ -2377,8 +2378,8 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           big: Type.Optional(Type.Boolean({ default: false })),
         }),
         async execute(
-          _id: string,
-          params: { peer: string | number; message_id: number; emoji?: string; reaction?: string; big?: boolean }
+          _id        ,
+          params                                                                                                 
         ) {
           const res = await fetchBridge(api, profile, "/send_reaction", {
             method: "POST",
@@ -2405,7 +2406,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           peer: Type.Union([Type.String(), Type.Number()], { description: "Chat username or id" }),
           message_id: Type.Number({ minimum: 1 }),
         }),
-        async execute(_id: string, params: { peer: string | number; message_id: number }) {
+        async execute(_id        , params                                               ) {
           const res = await fetchBridge(api, profile, "/remove_reaction", {
             method: "POST",
             body: JSON.stringify(params),
@@ -2433,16 +2434,16 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             })
           ),
         }),
-        async execute(_id: string, params: { refresh?: boolean }) {
+        async execute(_id        , params                       ) {
           const refresh = params.refresh ? "?refresh=true" : "";
           const res = await fetchBridge(api, profile, `/sources${refresh}`);
           if (!res.ok) {
             return toolResult(formatBridgeError(res));
           }
           const sources =
-            (res.data as {
-              sources?: Array<{ title?: string; type?: string; peer_id?: unknown; username?: string; is_forum?: boolean }>;
-            })?.sources ?? [];
+            (res.data     
+                                                                                                                           
+             )?.sources ?? [];
           const lines = sources.map((source) => {
             const tags = Array.from(new Set([source.type, source.is_forum ? "forum" : null].filter(Boolean))).join(
               ", "
@@ -2473,7 +2474,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             })
           ),
         }),
-        async execute(_id: string, params: { limit?: number }) {
+        async execute(_id        , params                    ) {
           const limit = Math.min(2000, Math.max(1, params.limit ?? 500));
           const res = await fetchBridge(api, profile, "/sources/sync", {
             method: "POST",
@@ -2482,7 +2483,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           if (!res.ok) {
             return toolResult(formatBridgeError(res));
           }
-          const meta = (res.data as { meta?: { dialog_count?: unknown } } | undefined)?.meta;
+          const meta = (res.data                                                     )?.meta;
           const count = typeof meta?.dialog_count === "number" ? meta.dialog_count : undefined;
           return toolResult(count !== undefined ? `Sources synced (${count} sourceable dialogs).` : "Sources synced.");
         },
@@ -2501,7 +2502,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             Type.Number({ minimum: 1, maximum: 50, default: 20, description: "Max number of dialogs" })
           ),
         }),
-        async execute(_id: string, params: { limit?: number }) {
+        async execute(_id        , params                    ) {
           const res = await fetchBridge(
             api,
             profile,
@@ -2511,7 +2512,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
             return toolResult(formatBridgeError(res));
           }
           const dialogs =
-            (res.data as { dialogs?: Array<{ id: unknown; title: string; username?: string }> })?.dialogs ?? [];
+            (res.data                                                                          )?.dialogs ?? [];
           const lines = dialogs.map(
             (dialog) =>
               `- ${dialog.title || dialog.username || dialog.id} (id: ${dialog.id}${
@@ -2535,13 +2536,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         peer: Type.Union([Type.String(), Type.Number()], { description: "Username, chat id, or 'me'" }),
         message_id: Type.Number({ minimum: 1 }),
       }),
-      async execute(_id: string, params: { peer: string | number; message_id: number }) {
+      async execute(_id        , params                                               ) {
         const peer = encodeURIComponent(String(params.peer));
         const res = await fetchBridge(api, profile, `/message?peer=${peer}&message_id=${Math.max(1, params.message_id)}`);
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }
-        const message = (res.data as Record<string, unknown> | undefined) ?? {};
+        const message = (res.data                                       ) ?? {};
         const parts = formatTelegramMessageParts(message);
         const body = typeof message.text === "string" && message.text ? message.text : "(no text)";
         return toolResult(`${parts.join(" | ")}${parts.length ? " | " : ""}${body}`);
@@ -2563,8 +2564,8 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         from_user: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "Optional sender filter" })),
       }),
       async execute(
-        _id: string,
-        params: { peer: string | number; query: string; limit?: number; from_user?: string | number }
+        _id        ,
+        params                                                                                       
       ) {
         const res = await fetchBridge(api, profile, "/search_messages", {
           method: "POST",
@@ -2578,7 +2579,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }
-        const messages = (res.data as { messages?: Array<Record<string, unknown>> })?.messages ?? [];
+        const messages = (res.data                                                 )?.messages ?? [];
         const lines = messages.map((message) => {
           const parts = formatTelegramMessageParts(message);
           const body = typeof message.text === "string" && message.text ? message.text : "(no text)";
@@ -2602,7 +2603,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           message_id: Type.Number({ minimum: 1 }),
           output_path: Type.Optional(Type.String({ description: "Optional target path on the backend host" })),
         }),
-        async execute(_id: string, params: { peer: string | number; message_id: number; output_path?: string }) {
+        async execute(_id        , params                                                                     ) {
           const peer = encodeURIComponent(String(params.peer));
           const output =
             typeof params.output_path === "string" && params.output_path.trim()
@@ -2616,7 +2617,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           if (!res.ok) {
             return toolResult(formatBridgeError(res));
           }
-          const path = (res.data as { path?: unknown } | undefined)?.path;
+          const path = (res.data                                  )?.path;
           return toolResult(path ? `Media downloaded to ${path}.` : "Media downloaded.");
         },
       },
@@ -2631,13 +2632,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
       parameters: Type.Object({
         username: Type.String({ minLength: 1, description: "Telegram username, with or without @" }),
       }),
-      async execute(_id: string, params: { username: string }) {
+      async execute(_id        , params                      ) {
         const username = encodeURIComponent(params.username);
         const res = await fetchBridge(api, profile, `/resolve_username?username=${username}`);
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }
-        const data = (res.data as Record<string, unknown> | undefined) ?? {};
+        const data = (res.data                                       ) ?? {};
         return toolResult(
           `${data.title || data.username || data.id || params.username} (id: ${data.id ?? "?"}${data.username ? `, @${data.username}` : ""}${
             data.type ? `, ${data.type}` : ""
@@ -2655,13 +2656,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
       parameters: Type.Object({
         peer: Type.Union([Type.String(), Type.Number()], { description: "User username or id" }),
       }),
-      async execute(_id: string, params: { peer: string | number }) {
+      async execute(_id        , params                           ) {
         const peer = encodeURIComponent(String(params.peer));
         const res = await fetchBridge(api, profile, `/user_status?peer=${peer}`);
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }
-        const data = (res.data as Record<string, unknown> | undefined) ?? {};
+        const data = (res.data                                       ) ?? {};
         return toolResult(
           `${data.username || data.id || params.peer} | status:${data.status_type || "unknown"}${
             data.was_online ? ` | was_online:${data.was_online}` : ""
@@ -2683,7 +2684,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200, default: 100 })),
         offset: Type.Optional(Type.Number({ minimum: 0, default: 0 })),
       }),
-      async execute(_id: string, params: { peer: string | number; limit?: number; offset?: number }) {
+      async execute(_id        , params                                                            ) {
         const peer = encodeURIComponent(String(params.peer));
         const limit = Math.min(200, Math.max(1, params.limit ?? 100));
         const offset = Math.max(0, params.offset ?? 0);
@@ -2692,7 +2693,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           return toolResult(formatBridgeError(res));
         }
         const participants =
-          (res.data as { participants?: Array<{ id?: unknown; title?: string; username?: string }> } | undefined)
+          (res.data                                                                                             )
             ?.participants ?? [];
         const lines = participants.map((participant) =>
           `- ${participant.title || participant.username || participant.id} (id: ${participant.id}${
@@ -2717,7 +2718,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200, default: 100 })),
       }),
-      async execute(_id: string, params: { peer: string | number; limit?: number }) {
+      async execute(_id        , params                                           ) {
         const peer = encodeURIComponent(String(params.peer));
         const limit = Math.min(200, Math.max(1, params.limit ?? 100));
         const res = await fetchBridge(api, profile, `/admins?peer=${peer}&limit=${limit}`);
@@ -2725,7 +2726,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           return toolResult(formatBridgeError(res));
         }
         const admins =
-          (res.data as { admins?: Array<{ id?: unknown; title?: string; username?: string }> } | undefined)?.admins ??
+          (res.data                                                                                       )?.admins ??
           [];
         const lines = admins.map((admin) =>
           `- ${admin.title || admin.username || admin.id} (id: ${admin.id}${admin.username ? `, @${admin.username}` : ""})`
@@ -2746,7 +2747,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           const res = await fetchBridge(api, profile, "/contacts");
           if (!res.ok) return toolResult(formatBridgeError(res));
           const contacts =
-            (res.data as { contacts?: Array<{ id?: unknown; title?: string; username?: string; phone?: string }> } | undefined)
+            (res.data                                                                                                         )
               ?.contacts ?? [];
           const lines = contacts.map((contact) =>
             `- ${contact.title || contact.username || contact.id} (id: ${contact.id}${contact.username ? `, @${contact.username}` : ""}${
@@ -2769,14 +2770,14 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           query: Type.String({ minLength: 1 }),
           limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 10 })),
         }),
-        async execute(_id: string, params: { query: string; limit?: number }) {
+        async execute(_id        , params                                   ) {
           const res = await fetchBridge(api, profile, "/search_contacts", {
             method: "POST",
             body: JSON.stringify({ query: params.query, limit: Math.min(50, Math.max(1, params.limit ?? 10)) }),
           });
           if (!res.ok) return toolResult(formatBridgeError(res));
           const contacts =
-            (res.data as { contacts?: Array<{ id?: unknown; title?: string; username?: string; phone?: string }> } | undefined)
+            (res.data                                                                                                         )
               ?.contacts ?? [];
           const lines = contacts.map((contact) =>
             `- ${contact.title || contact.username || contact.id} (id: ${contact.id}${contact.username ? `, @${contact.username}` : ""}${
@@ -2798,12 +2799,12 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         parameters: Type.Object({
           limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200, default: 100 })),
         }),
-        async execute(_id: string, params: { limit?: number }) {
+        async execute(_id        , params                    ) {
           const limit = Math.min(200, Math.max(1, params.limit ?? 100));
           const res = await fetchBridge(api, profile, `/blocked_users?limit=${limit}`);
           if (!res.ok) return toolResult(formatBridgeError(res));
           const users =
-            (res.data as { users?: Array<{ id?: unknown; title?: string; username?: string }> } | undefined)?.users ?? [];
+            (res.data                                                                                      )?.users ?? [];
           const lines = users.map((user) =>
             `- ${user.title || user.username || user.id} (id: ${user.id}${user.username ? `, @${user.username}` : ""})`
           );
@@ -2825,14 +2826,14 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200, default: 100 })),
         offset: Type.Optional(Type.Number({ minimum: 0, default: 0 })),
       }),
-      async execute(_id: string, params: { peer: string | number; limit?: number; offset?: number }) {
+      async execute(_id        , params                                                            ) {
         const peer = encodeURIComponent(String(params.peer));
         const limit = Math.min(200, Math.max(1, params.limit ?? 100));
         const offset = Math.max(0, params.offset ?? 0);
         const res = await fetchBridge(api, profile, `/banned_users?peer=${peer}&limit=${limit}&offset=${offset}`);
         if (!res.ok) return toolResult(formatBridgeError(res));
         const users =
-          (res.data as { users?: Array<{ id?: unknown; title?: string; username?: string }> } | undefined)?.users ?? [];
+          (res.data                                                                                      )?.users ?? [];
         const lines = users.map((user) =>
           `- ${user.title || user.username || user.id} (id: ${user.id}${user.username ? `, @${user.username}` : ""})`
         );
@@ -2849,11 +2850,11 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
       parameters: Type.Object({
         peer: Type.Union([Type.String(), Type.Number()], { description: "Username or chat id" }),
       }),
-      async execute(_id: string, params: { peer: string | number }) {
+      async execute(_id        , params                           ) {
         const peer = encodeURIComponent(String(params.peer));
         const res = await fetchBridge(api, profile, `/chat?peer=${peer}`);
         if (!res.ok) return toolResult(formatBridgeError(res));
-        const data = (res.data as Record<string, unknown> | undefined) ?? {};
+        const data = (res.data                                       ) ?? {};
         return toolResult(
           `${data.title || data.username || data.id || params.peer} (id: ${data.id}${data.username ? `, @${data.username}` : ""}${
             data.type ? `, ${data.type}` : ""
@@ -2872,12 +2873,12 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         peer: Type.Union([Type.String(), Type.Number()], { description: "Username or chat id" }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100, default: 50 })),
       }),
-      async execute(_id: string, params: { peer: string | number; limit?: number }) {
+      async execute(_id        , params                                           ) {
         const peer = encodeURIComponent(String(params.peer));
         const limit = Math.min(100, Math.max(1, params.limit ?? 50));
         const res = await fetchBridge(api, profile, `/history?peer=${peer}&limit=${limit}`);
         if (!res.ok) return toolResult(formatBridgeError(res));
-        const messages = (res.data as { messages?: Array<Record<string, unknown>> } | undefined)?.messages ?? [];
+        const messages = (res.data                                                             )?.messages ?? [];
         const lines = messages.map((message) => {
           const parts = formatTelegramMessageParts(message);
           const body = typeof message.text === "string" && message.text ? message.text : "(no text)";
@@ -2897,13 +2898,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         query: Type.String({ minLength: 1 }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 20 })),
       }),
-      async execute(_id: string, params: { query: string; limit?: number }) {
+      async execute(_id        , params                                   ) {
         const q = encodeURIComponent(params.query);
         const limit = Math.min(50, Math.max(1, params.limit ?? 20));
         const res = await fetchBridge(api, profile, `/search_public_chats?query=${q}&limit=${limit}`);
         if (!res.ok) return toolResult(formatBridgeError(res));
         const results =
-          (res.data as { results?: Array<{ id?: unknown; title?: string; username?: string; type?: string }> } | undefined)
+          (res.data                                                                                                       )
             ?.results ?? [];
         const lines = results.map((item) =>
           `- ${item.title || item.username || item.id} (id: ${item.id}${item.username ? `, @${item.username}` : ""}${
@@ -2924,11 +2925,11 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         peer: Type.Union([Type.String(), Type.Number()], { description: "Username or chat id" }),
         message_id: Type.Number({ minimum: 1 }),
       }),
-      async execute(_id: string, params: { peer: string | number; message_id: number }) {
+      async execute(_id        , params                                               ) {
         const peer = encodeURIComponent(String(params.peer));
         const res = await fetchBridge(api, profile, `/media_info?peer=${peer}&message_id=${Math.max(1, params.message_id)}`);
         if (!res.ok) return toolResult(formatBridgeError(res));
-        const data = (res.data as Record<string, unknown> | undefined) ?? {};
+        const data = (res.data                                       ) ?? {};
         const parts = [
           data.media_type ? `media:${data.media_type}` : null,
           data.file_name ? `file:${data.file_name}` : null,
@@ -2950,11 +2951,11 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         parameters: Type.Object({
           peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
         }),
-        async execute(_id: string, params: { peer: string | number }) {
+        async execute(_id        , params                           ) {
           const peer = encodeURIComponent(String(params.peer));
           const res = await fetchBridge(api, profile, `/invite_link?peer=${peer}`);
           if (!res.ok) return toolResult(formatBridgeError(res));
-          const link = (res.data as { link?: unknown } | undefined)?.link;
+          const link = (res.data                                  )?.link;
           return toolResult(link ? String(link) : "No invite link.");
         },
       },
@@ -2972,13 +2973,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         peer: Type.Union([Type.String(), Type.Number()], { description: "Supergroup or channel username or id" }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 20 })),
       }),
-      async execute(_id: string, params: { peer: string | number; limit?: number }) {
+      async execute(_id        , params                                           ) {
         const peer = encodeURIComponent(String(params.peer));
         const limit = Math.min(50, Math.max(1, params.limit ?? 20));
         const res = await fetchBridge(api, profile, `/recent_actions?peer=${peer}&limit=${limit}`);
         if (!res.ok) return toolResult(formatBridgeError(res));
         const events =
-          (res.data as { events?: Array<{ id?: unknown; date?: string; user_id?: unknown; action?: string }> } | undefined)
+          (res.data                                                                                                       )
             ?.events ?? [];
         const lines = events.map((event) =>
           `- id:${event.id}${event.user_id ? ` | user:${event.user_id}` : ""}${event.action ? ` | ${event.action}` : ""}${
@@ -2999,13 +3000,13 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         peer: Type.Union([Type.String(), Type.Number()], { description: "Group/channel username or id" }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, default: 20 })),
       }),
-      async execute(_id: string, params: { peer: string | number; limit?: number }) {
+      async execute(_id        , params                                           ) {
         const peer = encodeURIComponent(String(params.peer));
         const limit = Math.min(50, Math.max(1, params.limit ?? 20));
         const res = await fetchBridge(api, profile, `/pinned_messages?peer=${peer}&limit=${limit}`);
         if (!res.ok) return toolResult(formatBridgeError(res));
         const messages =
-          (res.data as { messages?: Array<{ id?: unknown; text?: string; sender_name?: string; date?: string }> } | undefined)
+          (res.data                                                                                                          )
             ?.messages ?? [];
         const lines = messages.map((message) =>
           `id:${message.id}${message.sender_name ? ` | ${message.sender_name}` : ""}${message.date ? ` | ${message.date}` : ""}${
@@ -3027,7 +3028,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         message_id: Type.Number({ minimum: 1 }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100, default: 50 })),
       }),
-      async execute(_id: string, params: { peer: string | number; message_id: number; limit?: number }) {
+      async execute(_id        , params                                                               ) {
         const peer = encodeURIComponent(String(params.peer));
         const limit = Math.min(100, Math.max(1, params.limit ?? 50));
         const res = await fetchBridge(
@@ -3037,7 +3038,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         );
         if (!res.ok) return toolResult(formatBridgeError(res));
         const reactions =
-          (res.data as { reactions?: Array<{ emoji?: string; count?: unknown }> } | undefined)?.reactions ?? [];
+          (res.data                                                                          )?.reactions ?? [];
         const lines = reactions.map((reaction) => `- ${reaction.emoji || "?"}: ${reaction.count ?? 0}`);
         return toolResult(lines.length ? lines.join("\n") : "No reactions.");
       },
@@ -3055,7 +3056,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         peer: Type.Union([Type.String(), Type.Number()], { description: "Forum chat username or chat id" }),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100, default: 20 })),
       }),
-      async execute(_id: string, params: { peer: string | number; limit?: number }) {
+      async execute(_id        , params                                           ) {
         const limit = Math.min(100, Math.max(1, params.limit ?? 20));
         const peer = encodeURIComponent(String(params.peer));
         const res = await fetchBridge(api, profile, `/topics?peer=${peer}&limit=${limit}`);
@@ -3063,16 +3064,16 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
           return toolResult(formatBridgeError(res));
         }
         const topics =
-          (res.data as {
-            topics?: Array<{
-              topic_id?: unknown;
-              title?: string;
-              unread_count?: unknown;
-              closed?: boolean;
-              pinned?: boolean;
-              hidden?: boolean;
-            }>;
-          })?.topics ?? [];
+          (res.data     
+                            
+                                 
+                             
+                                     
+                               
+                               
+                               
+               
+           )?.topics ?? [];
         const lines = topics.map((topic) => {
           const flags = [
             typeof topic.unread_count === "number" ? `unread:${topic.unread_count}` : null,
@@ -3122,8 +3123,8 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         ),
       }),
       async execute(
-        _id: string,
-        params: { peer: string | number; limit?: number; min_id?: number; since_unix?: number; topic_id?: number }
+        _id        ,
+        params                                                                                                    
       ) {
         const limit = Math.min(50, Math.max(1, params.limit ?? 20));
         const peer = encodeURIComponent(String(params.peer));
@@ -3139,7 +3140,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
         if (!res.ok) {
           return toolResult(formatBridgeError(res));
         }
-        const messages = (res.data as { messages?: Array<Record<string, unknown>> })?.messages ?? [];
+        const messages = (res.data                                                 )?.messages ?? [];
         const lines = messages.map((message) => {
           const parts = formatTelegramMessageParts(message, { includeDirection: true, includeSenderId: true });
           const body = typeof message.text === "string" && message.text ? message.text : "(no text)";
@@ -3165,12 +3166,12 @@ export const __test = {
   validateStrictDmAccountConfig,
 };
 
-export default function register(api: PluginApi) {
+export default function register(api           ) {
   const config = getConfig(api);
   registerDmChannel(api);
   const profileSlugs = new Set(config.profiles.map((profile) => slugifyToolId(profile.id)));
-  const registeredPrefixes = new Set<string>();
-  const registerPrefix = (profile: ProfileConfig, prefix: string): void => {
+  const registeredPrefixes = new Set        ();
+  const registerPrefix = (profile               , prefix        )       => {
     if (registeredPrefixes.has(prefix)) return;
     registerProfileTools(api, profile, prefix);
     registeredPrefixes.add(prefix);

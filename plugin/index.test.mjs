@@ -30,6 +30,20 @@ test("plugin manifest declares static config metadata for owned channel", async 
 
   assert.deepEqual(manifest.channels, ["telegram-user-bridge"]);
   assert.equal(typeof manifest.channelConfigs?.["telegram-user-bridge"]?.schema, "object");
+  assert.ok(Array.isArray(manifest.contracts?.tools));
+  assert.ok(manifest.contracts.tools.includes("telegram_*_send_message"));
+  assert.ok(manifest.contracts.tools.includes("telegram_*_get_messages"));
+  assert.ok(manifest.contracts.tools.includes("telegram_*_join_chat_by_link"));
+});
+
+test("package metadata points OpenClaw runtime to built JavaScript entrypoint", async () => {
+  const pkg = JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
+  const buildScript = await readFile(new URL("./scripts/build.mjs", import.meta.url), "utf8");
+
+  assert.equal(pkg.main, "./dist/index.js");
+  assert.deepEqual(pkg.openclaw?.extensions, ["./dist/index.js"]);
+  assert.match(pkg.scripts?.build ?? "", /scripts\/build\.mjs/);
+  assert.match(buildScript, /dist\/index\.js/);
 });
 
 test("plugin registers isolated profile toolsets and forwards profile headers", async () => {
@@ -743,6 +757,7 @@ test("plugin registers DM channel and channel outbound uses backend send_message
     strictPeerBindings: true,
     markReadOnInbound: true,
     typingWhileReplying: true,
+    typingMaxDurationMs: 120000,
     policyProfile: "dm_inbox",
     allowFrom: ["123"],
     writeTo: ["123"],
@@ -803,6 +818,76 @@ test("DM channel outbound rejects missing target with clear error", async () => 
   );
 });
 
+test("DM gateway startAccount stays pending until the monitor is stopped", async () => {
+  const api = createApi({
+    channels: {
+      "telegram-user-bridge": {
+        accounts: {
+          default: {
+            enabled: true,
+            strictPeerBindings: false,
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  let resolvePoll = null;
+  globalThis.fetch = async () =>
+    new Promise((resolve) => {
+      resolvePoll = resolve;
+    });
+
+  const account = api.channels[0].config.resolveAccount(api.config, "default");
+  const abortController = new AbortController();
+  const statuses = [];
+  const startPromise = api.channels[0].gateway.startAccount({
+    account,
+    cfg: api.config,
+    channelRuntime: {
+      reply: {},
+      routing: {},
+      session: {},
+    },
+    abortSignal: abortController.signal,
+    getStatus() {
+      return statuses.at(-1) ?? null;
+    },
+    setStatus(value) {
+      statuses.push(value);
+    },
+  });
+  let resolved = false;
+  const observedStartPromise = startPromise.then((handle) => {
+    resolved = true;
+    return handle;
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  let assertionError = null;
+  try {
+    assert.equal(resolved, false);
+  } catch (error) {
+    assertionError = error;
+  } finally {
+    abortController.abort();
+    resolvePoll(
+      new Response(JSON.stringify({ events: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+    const handle = await observedStartPromise;
+    await handle.stop();
+  }
+
+  if (assertionError) {
+    throw assertionError;
+  }
+});
+
 test("DM gateway startAccount works with channelRuntime and explicit stopAccount", async () => {
   const api = createApi({
     channels: {
@@ -818,15 +903,14 @@ test("DM gateway startAccount works with channelRuntime and explicit stopAccount
   });
   register(api);
 
+  let resolvePoll = null;
   globalThis.fetch = async () =>
-    new Response(JSON.stringify({ events: [] }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
+    new Promise((resolve) => {
+      resolvePoll = resolve;
     });
 
   const account = api.channels[0].config.resolveAccount(api.config, "default");
   const abortController = new AbortController();
-  abortController.abort();
   const statuses = [];
   const channelRuntime = {
     reply: {
@@ -860,7 +944,7 @@ test("DM gateway startAccount works with channelRuntime and explicit stopAccount
     },
   };
 
-  const handle = await api.channels[0].gateway.startAccount({
+  const startPromise = api.channels[0].gateway.startAccount({
     account,
     cfg: api.config,
     channelRuntime,
@@ -873,8 +957,9 @@ test("DM gateway startAccount works with channelRuntime and explicit stopAccount
     },
   });
 
-  assert.equal(typeof handle.stop, "function");
-  await api.channels[0].gateway.stopAccount({
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const stopPromise = api.channels[0].gateway.stopAccount({
     account,
     cfg: api.config,
     channelRuntime,
@@ -885,6 +970,16 @@ test("DM gateway startAccount works with channelRuntime and explicit stopAccount
       return statuses.at(-1) ?? null;
     },
   });
+  resolvePoll(
+    new Response(JSON.stringify({ events: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })
+  );
+
+  await stopPromise;
+  const handle = await startPromise;
+  assert.equal(typeof handle.stop, "function");
   assert.match(JSON.stringify(statuses), /stopped/);
 });
 
@@ -2770,6 +2865,97 @@ test("typing loop stop waits for in-flight tick started right before stop", asyn
   } finally {
     globalThis.setInterval = originalSetInterval;
     globalThis.clearInterval = originalClearInterval;
+  }
+});
+
+test("typing loop stops after configured max duration even without explicit stop", async () => {
+  const originalSetInterval = globalThis.setInterval;
+  const originalClearInterval = globalThis.clearInterval;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let scheduledTick = null;
+  const scheduledTimeouts = [];
+  let intervalMs = null;
+  let clearIntervalCalled = false;
+  let clearTimeoutCalled = false;
+  globalThis.setInterval = (callback, ms) => {
+    scheduledTick = callback;
+    intervalMs = ms;
+    return 777;
+  };
+  globalThis.clearInterval = (timer) => {
+    if (timer === 777) {
+      clearIntervalCalled = true;
+    }
+  };
+  globalThis.setTimeout = (callback, ms) => {
+    const timer = { id: scheduledTimeouts.length + 1, callback, ms };
+    scheduledTimeouts.push(timer);
+    return timer;
+  };
+  globalThis.clearTimeout = (timer) => {
+    if (timer?.ms === 25) {
+      clearTimeoutCalled = true;
+    }
+  };
+
+  try {
+    let typingCalls = 0;
+    globalThis.fetch = async (url) => {
+      const normalizedUrl = String(url);
+      if (!normalizedUrl.includes("/dm/typing")) {
+        throw new Error(`unexpected fetch: ${normalizedUrl}`);
+      }
+      typingCalls += 1;
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const loopHandle = await __test.startInboundDmTypingLoop({
+      account: {
+        accountId: "default",
+        defaultAccountId: "default",
+        enabled: true,
+        label: "Telegram User DM",
+        baseUrl: "http://127.0.0.1:8765",
+        strictPeerBindings: true,
+        timeoutMs: 30000,
+        pollTimeoutMs: 25000,
+        pollIntervalMs: 1500,
+        typingMaxDurationMs: 25,
+      },
+      event: {
+        id: 13,
+        text: "hello",
+        sender_id: "123456789",
+      },
+    });
+
+    assert.equal(typingCalls, 1);
+    assert.equal(intervalMs, 4000);
+    assert.equal(typeof scheduledTick, "function");
+    const maxDurationTimeout = scheduledTimeouts.find((timer) => timer.ms === 25);
+    assert.equal(typeof maxDurationTimeout?.callback, "function");
+
+    await scheduledTick();
+    assert.equal(typingCalls, 2);
+
+    maxDurationTimeout.callback();
+    await new Promise((resolve) => originalSetTimeout(resolve, 0));
+    assert.equal(clearIntervalCalled, true);
+
+    await scheduledTick();
+    assert.equal(typingCalls, 2);
+
+    await loopHandle.stop();
+    assert.equal(clearTimeoutCalled, true);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
   }
 });
 
