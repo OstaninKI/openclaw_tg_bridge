@@ -40,6 +40,7 @@ type ProfileConfig = PolicyHeaderConfig & {
   id: string;
   label: string;
   mode: ProfileMode;
+  backendFileTools: boolean;
   privilegedTools: boolean;
 };
 
@@ -222,6 +223,7 @@ function normalizeProfile(raw: Record<string, unknown>, fallbackId: string): Pro
     id,
     label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : id,
     mode,
+    backendFileTools: raw.backendFileTools === true,
     privilegedTools: raw.privilegedTools === true,
     policyProfile:
       typeof raw.policyProfile === "string" && raw.policyProfile.trim() ? raw.policyProfile.trim() : undefined,
@@ -250,6 +252,7 @@ function getConfig(api: { config: Record<string, unknown> }): PluginConfig {
       id: "user",
       label: "User",
       mode: "interactive",
+      backendFileTools: true,
       privilegedTools: true,
       policyProfile:
         typeof cfg?.policyProfile === "string" && (cfg.policyProfile as string).trim()
@@ -1563,6 +1566,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
   const optional = { optional: true };
   const isSourcesReadOnly = profile.mode === "sources_ro";
   const allowPrivilegedTools = !isSourcesReadOnly && profile.privilegedTools === true;
+  const allowBackendFileTools = !isSourcesReadOnly && (profile.backendFileTools === true || allowPrivilegedTools);
   const allowOwnerJoinTools = allowPrivilegedTools && isOwnerProfile(profile);
   const allowOwnerFolderTools = allowPrivilegedTools && isOwnerProfile(profile);
 
@@ -1622,7 +1626,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
       optional
     );
 
-    if (allowPrivilegedTools) {
+    if (allowBackendFileTools) {
       api.registerTool(
         {
           name: `${prefix}_send_file`,
@@ -1821,7 +1825,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
       );
     }
 
-    if (allowPrivilegedTools) {
+    if (allowBackendFileTools) {
       api.registerTool(
         {
           name: `${prefix}_send_voice`,
@@ -1884,7 +1888,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
       optional
     );
 
-    if (allowPrivilegedTools) {
+    if (allowBackendFileTools) {
       api.registerTool(
         {
           name: `${prefix}_send_sticker`,
@@ -2617,7 +2621,7 @@ function registerProfileTools(api: PluginApi, profile: ProfileConfig, prefixOver
     optional
   );
 
-  if (allowPrivilegedTools) {
+  if (allowBackendFileTools) {
     api.registerTool(
       {
         name: `${prefix}_download_media`,

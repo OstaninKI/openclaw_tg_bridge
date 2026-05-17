@@ -266,7 +266,7 @@ For each additional sender (e.g. `alice`, `bob`), add all of these:
 }
 ```
 
-Do not set `privilegedTools: true` on extra trusted profiles unless explicitly requested.
+Do not set `privilegedTools: true` on extra trusted profiles unless self-account/contact mutation is explicitly requested. If an extra trusted profile only needs file/media send or download tools, use `backendFileTools: true`.
 
 ---
 
@@ -276,7 +276,7 @@ Do not set `privilegedTools: true` on extra trusted profiles unless explicitly r
 - Preserve all unrelated OpenClaw config.
 - Keep `strictPeerBindings: true` and `session.dmScope = "per-channel-peer"`.
 - Treat `owner_dm` as a protected baseline — extend only `trusted*_dm` by default.
-- Any profile with `privilegedTools: true` must have `"me"` in backend `write.allow`.
+- Any profile with `backendFileTools: true` or `privilegedTools: true` must have `"me"` in backend `write.allow`.
 
 ---
 

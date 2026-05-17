@@ -8,7 +8,7 @@ const sourcePath = resolve(root, "index.ts");
 const outputPath = resolve(root, "dist/index.js");
 
 const source = await readFile(sourcePath, "utf8");
-const js = stripTypeScriptTypes(source);
+const js = stripTypeScriptTypes(source).replace(/[ \t]+$/gm, "");
 
 await mkdir(dirname(outputPath), { recursive: true });
 await writeFile(

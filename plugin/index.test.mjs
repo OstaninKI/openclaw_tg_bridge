@@ -173,6 +173,37 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   assert.match(result.content[0].text, /Message sent/);
 });
 
+test("profile can expose backend file tools without broader privileged tools", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [
+              {
+                id: "trusted_svetlana_dm",
+                label: "Trusted Svetlana",
+                backendFileTools: true,
+                policyProfile: "trusted_svetlana_dm",
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  register(api);
+
+  assert.ok(getTool(api, "telegram_trusted_svetlana_dm_send_file"));
+  assert.ok(getTool(api, "telegram_trusted_svetlana_dm_send_voice"));
+  assert.ok(getTool(api, "telegram_trusted_svetlana_dm_send_sticker"));
+  assert.ok(getTool(api, "telegram_trusted_svetlana_dm_download_media"));
+  assert.equal(getTool(api, "telegram_trusted_svetlana_dm_add_contact"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_svetlana_dm_create_group"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_svetlana_dm_leave_chat"), undefined);
+});
+
 test("owner_dm profile also registers owner compatibility aliases", async () => {
   const api = createApi({
     plugins: {

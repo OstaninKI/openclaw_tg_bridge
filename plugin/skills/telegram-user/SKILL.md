@@ -18,7 +18,7 @@ The same Telegram account may be exposed to multiple OpenClaw contexts, for exam
 - Treat `owner_dm` and every `trusted*_dm` profile as separate private contexts. Never mix facts or summaries between them.
 - **Behave like a user**: send one message at a time; the backend enforces a short delay before sending and can restrict allowed chats by id/username.
 - Writing is **denied by default**. If a send tool says writing is not allowed, do not retry with another identifier for the same chat. Ask the user to grant write access first.
-- Some interactive profiles may expose only the baseline chat surface. Backend-host file tools and self-account/contact mutation tools exist only on profiles explicitly configured with `privilegedTools: true` and backend `write.allow` containing `"me"`.
+- Some interactive profiles may expose only the baseline chat surface. Backend-host file/media tools exist on profiles with `backendFileTools: true` or `privilegedTools: true`; backend `write.allow` must also contain `"me"`. Self-account/contact mutation tools require `privilegedTools: true`.
 - Channel join by link and dialog-folder management are owner-only in this plugin and are exposed only for profiles with ids that start with `owner`.
 - If OpenClaw agents use global `tools.profile` (for example `coding`), enable Telegram plugin tools via `tools.alsoAllow`. Plugin-only `tools.allow` can be stripped by policy pipeline.
 - If OpenClaw agents use explicit `tools.allow`, owner agent allowlist must include `telegram_<context>_join_chat_by_link` for channel join flows.
@@ -39,7 +39,8 @@ The same Telegram account may be exposed to multiple OpenClaw contexts, for exam
 - Interactive DM tools: `telegram_<context>_send_message`, `telegram_<context>_get_dialogs`
 - Additional interactive tools:
   - baseline chat/message/admin tools: `telegram_<context>_send_location`, `telegram_<context>_edit_message`, `telegram_<context>_delete_message`, `telegram_<context>_forward_message`, `telegram_<context>_get_media_info`, `telegram_<context>_resolve_username`, `telegram_<context>_get_user_status`, `telegram_<context>_get_participants`, `telegram_<context>_get_admins`, `telegram_<context>_promote_admin`, `telegram_<context>_demote_admin`, `telegram_<context>_get_chat`, `telegram_<context>_get_message`, `telegram_<context>_get_history`, `telegram_<context>_search_messages`, `telegram_<context>_search_public_chats`, `telegram_<context>_get_pinned_messages`, `telegram_<context>_send_reaction`, `telegram_<context>_remove_reaction`, `telegram_<context>_get_message_reactions`, `telegram_<context>_transcribe_voice`
-  - privileged backend-host/self-account tools, only on profiles with `privilegedTools: true`: `telegram_<context>_send_file`, `telegram_<context>_send_voice`, `telegram_<context>_send_sticker`, `telegram_<context>_download_media`, `telegram_<context>_list_contacts`, `telegram_<context>_search_contacts`, `telegram_<context>_add_contact`, `telegram_<context>_delete_contact`, `telegram_<context>_block_user`, `telegram_<context>_unblock_user`, `telegram_<context>_get_blocked_users`, `telegram_<context>_create_group`, `telegram_<context>_create_channel`, `telegram_<context>_invite_to_group`, `telegram_<context>_get_invite_link`, `telegram_<context>_leave_chat`
+  - backend-host file/media tools, only on profiles with `backendFileTools: true` or `privilegedTools: true`: `telegram_<context>_send_file`, `telegram_<context>_send_voice`, `telegram_<context>_send_sticker`, `telegram_<context>_download_media`
+  - privileged self-account/contact tools, only on profiles with `privilegedTools: true`: `telegram_<context>_list_contacts`, `telegram_<context>_search_contacts`, `telegram_<context>_add_contact`, `telegram_<context>_delete_contact`, `telegram_<context>_block_user`, `telegram_<context>_unblock_user`, `telegram_<context>_get_blocked_users`, `telegram_<context>_create_group`, `telegram_<context>_create_channel`, `telegram_<context>_invite_to_group`, `telegram_<context>_get_invite_link`, `telegram_<context>_leave_chat`
   - owner-only tools (requires owner-prefixed context id): `telegram_<context>_join_chat_by_link`, `telegram_<context>_list_dialog_folders`, `telegram_<context>_upsert_dialog_folder`, `telegram_<context>_delete_dialog_folder`
   - baseline tools with chat-type limits: `telegram_<context>_get_banned_users`, `telegram_<context>_ban_user`, `telegram_<context>_unban_user`, `telegram_<context>_get_recent_actions` work only on supergroups/channels
 - Shared reading/polling tools: `telegram_<context>_list_topics`, `telegram_<context>_get_messages`
@@ -66,7 +67,7 @@ Safe default rule:
 - add, update, or remove only `trusted*_dm` profiles by default;
 - use numeric Telegram `sender_id` values for DM routing;
 - give each trusted sender a dedicated profile, binding, and agent;
-- keep extra trusted DM profiles non-privileged by default; do not add `privilegedTools: true` unless the user explicitly wants backend-host file access and self-account/contact mutation on that profile;
+- keep extra trusted DM profiles non-privileged by default; use `backendFileTools: true` only when the user explicitly wants backend-host file/media access, and do not add `privilegedTools: true` unless the user explicitly wants self-account/contact mutation on that profile;
 - do not merge multiple trusted people into one shared DM context if privacy matters.
 
 When adding a trusted DM user, update all of these places consistently:

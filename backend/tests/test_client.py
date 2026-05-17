@@ -610,6 +610,8 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
 
         with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()), patch(
             "openclaw_tg_bridge.client.Path.exists", return_value=True
+        ), patch("openclaw_tg_bridge.client.Path.is_file", return_value=True), patch(
+            "openclaw_tg_bridge.client.os.access", return_value=True
         ):
             result = await bridge.send_file("42", "/tmp/file.txt", caption="hello")
 
@@ -628,6 +630,8 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.mock_tg.send_file.return_value = SimpleNamespace(id=333)
 
         with patch("openclaw_tg_bridge.client.Path.exists", return_value=True), patch(
+            "openclaw_tg_bridge.client.Path.is_file", return_value=True
+        ), patch("openclaw_tg_bridge.client.os.access", return_value=True), patch(
             "openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()
         ):
             await bridge.send_file(
@@ -658,9 +662,33 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
     async def test_send_file_requires_self_write_access(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["42"])
 
-        with patch("openclaw_tg_bridge.client.Path.exists", return_value=True):
+        with patch("openclaw_tg_bridge.client.Path.exists", return_value=True), patch(
+            "openclaw_tg_bridge.client.Path.is_file", return_value=True
+        ), patch("openclaw_tg_bridge.client.os.access", return_value=True):
             with self.assertRaisesRegex(BridgeForbiddenError, "backend-host files"):
                 await bridge.send_file("42", "/tmp/file.txt")
+
+    async def test_send_file_rejects_non_regular_backend_path(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42", "me"])
+
+        with patch("openclaw_tg_bridge.client.Path.exists", return_value=True), patch(
+            "openclaw_tg_bridge.client.Path.is_file", return_value=False
+        ):
+            with self.assertRaisesRegex(BridgeValidationError, "regular file"):
+                await bridge.send_file("42", "/tmp")
+
+        self.mock_tg.send_file.assert_not_called()
+
+    async def test_send_file_rejects_backend_path_unreadable_by_service(self) -> None:
+        bridge = self.create_bridge(write_allow_chat_ids=["42", "me"])
+
+        with patch("openclaw_tg_bridge.client.Path.exists", return_value=True), patch(
+            "openclaw_tg_bridge.client.Path.is_file", return_value=True
+        ), patch("openclaw_tg_bridge.client.os.access", return_value=False):
+            with self.assertRaisesRegex(BridgeValidationError, "not readable"):
+                await bridge.send_file("42", "/tmp/private.jpg")
+
+        self.mock_tg.send_file.assert_not_called()
 
     async def test_get_blocked_users_requires_self_write_access(self) -> None:
         bridge = self.create_bridge(write_allow_chat_ids=["42"])

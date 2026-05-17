@@ -430,7 +430,7 @@ This will register tools like:
 
 All interactive profiles expose the baseline chat/message/admin surface. That includes tools such as `send_message`, `send_location`, `edit_message`, `delete_message`, `forward_message`, `get_message`, `get_history`, `search_messages`, `get_participants`, `get_admins`, `promote_admin`, `demote_admin`, `get_chat`, `search_public_chats`, `get_pinned_messages`, `send_reaction`, `remove_reaction`, `get_message_reactions`, `resolve_username`, `get_user_status`, `get_media_info`, `transcribe_voice`, and topic-aware reading.
 
-Profiles with `"privilegedTools": true` keep that same baseline surface and additionally expose backend-host file tools plus self-account/contact mutation tools. The extra tools are:
+Profiles with `"backendFileTools": true` expose backend-host file/media tools without exposing self-account/contact mutation tools. Profiles with `"privilegedTools": true` keep that same file/media surface and additionally expose self-account/contact mutation tools. Any profile that uses backend-host file/media tools must also include `"me"` in backend `write.allow`. The extra tools are:
 
 - backend-host file tools:
   - `telegram_owner_dm_send_file`
@@ -660,7 +660,7 @@ Example for adding two more trusted senders:
 ]
 ```
 
-Do not set `privilegedTools: true` on these extra trusted DM profiles unless you explicitly want them to access backend-host files and self-account/contact mutation flows.
+Do not set `privilegedTools: true` on these extra trusted DM profiles unless you explicitly want self-account/contact mutation flows. If a trusted profile only needs to send or download backend-host files, prefer `backendFileTools: true`.
 
 `channels.telegram-user-bridge.accounts.default`
 
@@ -916,6 +916,7 @@ Each profile can define:
   - `interactive`
   - `sources_ro`
 - `privilegedTools`
+- `backendFileTools`
 - `policyProfile`
 - `replyDelaySec`
 - `replyDelayMaxSec`
@@ -926,7 +927,7 @@ Each profile can define:
 
 These are backend-enforced overrides on top of the JSON policy file. If omitted, the backend uses the policy file and environment defaults.
 
-`privilegedTools: true` exposes backend-host file tools and self-account/contact mutation tools for that profile. Profiles without it still get the normal chat/message/admin reading surface, but not file/download/contact/create/invite/leave flows. Join-by-link and dialog-folder flows are additionally owner-only in plugin code. Any profile that uses privileged tools should also include `"me"` in backend `write.allow`.
+`backendFileTools: true` exposes only backend-host file/media tools for that profile: `send_file`, `send_voice`, `send_sticker`, and `download_media`. `privilegedTools: true` remains the broader option and exposes backend-host file/media tools plus self-account/contact mutation tools. Profiles without either flag still get the normal chat/message/admin reading surface, but not file/download/contact/create/invite/leave flows. Join-by-link and dialog-folder flows are additionally owner-only in plugin code. Any profile that uses backend-host file/media tools should also include `"me"` in backend `write.allow`.
 
 For event-driven DMs, also configure `channels.telegram-user-bridge.accounts.<id>` with:
 

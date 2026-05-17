@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 import logging
+import os
 import random
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -662,6 +663,20 @@ def _require_self_write(scope: BridgeScope, *, detail: str) -> None:
         raise BridgeForbiddenError(detail)
 
 
+def _validate_backend_file_path(file_path: str) -> str:
+    normalized = str(file_path or "").strip()
+    if not normalized:
+        raise BridgeValidationError("file_path is required.")
+    path = Path(normalized)
+    if not path.exists():
+        raise BridgeValidationError("File does not exist on the backend host.")
+    if not path.is_file():
+        raise BridgeValidationError("Backend path exists but is not a regular file.")
+    if not os.access(path, os.R_OK):
+        raise BridgeValidationError("File is not readable by the backend service.")
+    return normalized
+
+
 def _extract_flood_wait_seconds(exc: BaseException) -> int | None:
     seconds = getattr(exc, "seconds", None)
     if isinstance(seconds, int):
@@ -1055,11 +1070,7 @@ class BridgeClient:
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
         _require_self_write(policy.write_scope, detail="Writing backend-host files is not allowed for this profile.")
-        file_path = str(file_path or "").strip()
-        if not file_path:
-            raise BridgeValidationError("file_path is required.")
-        if not Path(file_path).exists():
-            raise BridgeValidationError("File does not exist on the backend host.")
+        file_path = _validate_backend_file_path(file_path)
         async with self._send_lock:
             entity, _ = await self._resolve_scoped_entity(
                 peer,
@@ -1103,11 +1114,7 @@ class BridgeClient:
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
         _require_self_write(policy.write_scope, detail="Writing backend-host files is not allowed for this profile.")
-        file_path = str(file_path or "").strip()
-        if not file_path:
-            raise BridgeValidationError("file_path is required.")
-        if not Path(file_path).exists():
-            raise BridgeValidationError("File does not exist on the backend host.")
+        file_path = _validate_backend_file_path(file_path)
         async with self._send_lock:
             entity, _ = await self._resolve_scoped_entity(
                 peer,
@@ -1135,11 +1142,7 @@ class BridgeClient:
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
         _require_self_write(policy.write_scope, detail="Writing backend-host files is not allowed for this profile.")
-        file_path = str(file_path or "").strip()
-        if not file_path:
-            raise BridgeValidationError("file_path is required.")
-        if not Path(file_path).exists():
-            raise BridgeValidationError("File does not exist on the backend host.")
+        file_path = _validate_backend_file_path(file_path)
         async with self._send_lock:
             entity, _ = await self._resolve_scoped_entity(
                 peer,

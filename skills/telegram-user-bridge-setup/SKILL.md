@@ -76,6 +76,7 @@ Prefer **linking** the plugin from the local repo instead of copying it elsewher
    - copy `/absolute/path/to/repo/deploy/policy.json.example` to `~/.openclaw/telethon/policy.json`
    - replace placeholder ids with the real owner/trusted sender ids
    - keep `owner_dm` privileged only if the user wants backend-host file tools and self-account/contact flows
+   - for extra trusted DM profiles that only need file/media send or download tools, prefer `backendFileTools: true` over `privilegedTools: true`
 7. Merge OpenClaw config from `/absolute/path/to/repo/deploy/openclaw.json.example` into `~/.openclaw/openclaw.json`
 8. Preserve unrelated user config. Only change:
    - `session.dmScope`

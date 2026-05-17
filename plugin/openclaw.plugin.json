@@ -76,6 +76,11 @@
               "default": false,
               "description": "Expose backend-host file tools and self-account/contact mutation tools for this profile"
             },
+            "backendFileTools": {
+              "type": "boolean",
+              "default": false,
+              "description": "Expose only backend-host file/media tools for this profile. This enables send_file, send_voice, send_sticker, and download_media without contact/account mutation tools."
+            },
             "policyProfile": { "type": "string", "description": "Backend policy profile to use for this context" },
             "replyDelaySec": { "type": "number" },
             "replyDelayMaxSec": { "type": "number" },

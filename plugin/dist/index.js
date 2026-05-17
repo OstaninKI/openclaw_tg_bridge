@@ -24,92 +24,93 @@ const HEADER_DENY_FROM = "X-OpenClaw-Deny-From";
 const HEADER_WRITE_TO = "X-OpenClaw-Write-To";
 const HEADER_DENY_WRITE_TO = "X-OpenClaw-Deny-Write-To";
 
-                                                                      
-                                                
 
-                           
-                         
-                         
-                            
-                       
-                      
-                     
-                         
-  
 
-                                           
-             
-                
-                    
-                           
-  
 
-                     
-                  
-                    
-                    
-                            
-  
 
-                                                  
-                    
-                           
-                   
-                
-                  
-                    
-                              
-                    
-                        
-                         
-                             
-                               
-                              
-  
 
-                        
-                           
-                                   
-  
 
-                       
-              
-                 
-                 
-                  
-                      
-                        
-  
 
-                     
-             
-               
-                             
-                       
-                           
-                
-                      
-                             
-                            
-                            
-                            
-                             
-                                
-                           
-                            
-                              
-                                
-                                 
-                           
-                                
-                                     
-                                    
-                                           
-                                
-                                                                   
-                                  
-                                      
-  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 function toolResult(text        )              {
   return { content: [{ type: "text"         , text }] };
@@ -223,6 +224,7 @@ function normalizeProfile(raw                         , fallbackId        )     
     id,
     label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : id,
     mode,
+    backendFileTools: raw.backendFileTools === true,
     privilegedTools: raw.privilegedTools === true,
     policyProfile:
       typeof raw.policyProfile === "string" && raw.policyProfile.trim() ? raw.policyProfile.trim() : undefined,
@@ -236,8 +238,8 @@ function normalizeProfile(raw                         , fallbackId        )     
 }
 
 function getConfig(api                                     )               {
-  const entries = (api.config?.plugins                           )?.entries   
-                                             
+  const entries = (api.config?.plugins                           )?.entries
+
                ;
   const cfg = entries?.[CHANNEL_ID]?.config                                       ;
 
@@ -251,6 +253,7 @@ function getConfig(api                                     )               {
       id: "user",
       label: "User",
       mode: "interactive",
+      backendFileTools: true,
       privilegedTools: true,
       policyProfile:
         typeof cfg?.policyProfile === "string" && (cfg.policyProfile          ).trim()
@@ -276,7 +279,7 @@ function getConfig(api                                     )               {
 function normalizeChannelAccount(
   raw                         ,
   accountId        ,
-  pluginConfig              
+  pluginConfig
 )                       {
   const pollTimeoutMs =
     typeof raw.pollTimeoutMs === "number" && raw.pollTimeoutMs > 0 ? raw.pollTimeoutMs : 25000;
@@ -321,7 +324,7 @@ function getDmChannelConfig(api                                     )           
 
 function getDmChannelConfigFromConfig(
   config                         ,
-  pluginConfig              
+  pluginConfig
 )                         {
   const channels = config?.channels                                       ;
   const cfg = channels?.[CHANNEL_ID]                                       ;
@@ -348,7 +351,7 @@ function getDmChannelConfigFromConfig(
 
 function resolveDmChannelAccount(
   api                                     ,
-  accountId                
+  accountId
 )                       {
   return resolveDmChannelAccountFromConfig(api.config, getConfig(api), accountId);
 }
@@ -356,7 +359,7 @@ function resolveDmChannelAccount(
 function resolveDmChannelAccountFromConfig(
   config                         ,
   pluginConfig              ,
-  accountId                
+  accountId
 )                       {
   const channelConfig = getDmChannelConfigFromConfig(config, pluginConfig);
   if (!channelConfig) {
@@ -500,32 +503,32 @@ function formatBridgeError(res                )         {
   return detail || BRIDGE_UNAVAILABLE;
 }
 
-                     
-                                  
-                                                                       
-                                                           
-             
-               
-                                                             
-                                                               
-                                                               
-      
-    
-                                         
- 
 
-                                                                                    
 
-                            
-                                
-                     
-                               
-                                 
-                                      
-                            
-                            
-                                       
-  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 function resolveDmScope(cfg                         )         {
   const session = cfg.session                                       ;
@@ -684,7 +687,7 @@ function buildInboundDmBody(event              )         {
 function resolveConfiguredDmBinding(
   cfg                         ,
   account                      ,
-  event              
+  event
 )                                                {
   const bindings = Array.isArray(cfg.bindings) ? (cfg.bindings                                  ) : [];
   const senderKeys = new Set(
@@ -729,7 +732,7 @@ function resolveConfiguredDmBinding(
 
 function collectRelevantDirectBindings(
   cfg                         ,
-  account                      
+  account
 )                                             {
   const bindings = Array.isArray(cfg.bindings) ? (cfg.bindings                                  ) : [];
   const relevant                                             = [];
@@ -762,7 +765,7 @@ function collectRelevantDirectBindings(
 function validateStrictDmAccountConfig(
   cfg                         ,
   account                      ,
-  expectedToolPrefixes          
+  expectedToolPrefixes
 )           {
   if (!account.strictPeerBindings) {
     return [];
@@ -1056,10 +1059,10 @@ async function sendInboundDmTyping(account                      , event         
   }
 }
 
-async function startInboundDmTypingLoop(params   
-                                
-                      
-                                               
+async function startInboundDmTypingLoop(params
+
+
+
  )                                         {
   let stopped = false;
   let inFlight                       = null;
@@ -1116,7 +1119,7 @@ async function startInboundDmTypingLoop(params
 async function deliverInboundDmReply(
   account                      ,
   senderId                 ,
-  payload                                                            
+  payload
 )                {
   const text = buildDmText(payload);
   if (!text) return;
@@ -1133,12 +1136,12 @@ async function deliverInboundDmReply(
   }
 }
 
-async function processInboundDmEvent(params   
-                 
-                               
-                                
-                      
-                                     
+async function processInboundDmEvent(params
+
+
+
+
+
  )                                   {
   const core = params.channelRuntime;
   const senderId = String(params.event.sender_id);
@@ -1147,10 +1150,10 @@ async function processInboundDmEvent(params
     configuredRoute ??
     (params.account.strictPeerBindings
       ? null
-      : (core.routing.resolveAgentRoute                             
-                          
-                            
-                             
+      : (core.routing.resolveAgentRoute
+
+
+
          )({
           cfg: params.cfg,
           channel: CHANNEL_ID,
@@ -1303,13 +1306,13 @@ async function processInboundDmEvent(params
   return "processed";
 }
 
-async function startDmChannelMonitor(params   
-                 
-                               
-                                
-                                     
-                            
-                                      
+async function startDmChannelMonitor(params
+
+
+
+
+
+
  )                                                              {
   let stopped = false;
   let stopPromise                       = null;
@@ -1478,11 +1481,11 @@ function registerDmChannel(api           )       {
         text,
         accountId,
         cfg,
-      }   
-                   
-                     
-                           
-                                     
+      }
+
+
+
+
        ) => {
         const account = resolveDmChannelAccountFromConfig(cfg, pluginConfig, accountId);
         const peer = stripDmTargetPrefix(to);
@@ -1564,6 +1567,7 @@ function registerProfileTools(api           , profile               , prefixOver
   const optional = { optional: true };
   const isSourcesReadOnly = profile.mode === "sources_ro";
   const allowPrivilegedTools = !isSourcesReadOnly && profile.privilegedTools === true;
+  const allowBackendFileTools = !isSourcesReadOnly && (profile.backendFileTools === true || allowPrivilegedTools);
   const allowOwnerJoinTools = allowPrivilegedTools && isOwnerProfile(profile);
   const allowOwnerFolderTools = allowPrivilegedTools && isOwnerProfile(profile);
 
@@ -1589,16 +1593,16 @@ function registerProfileTools(api           , profile               , prefixOver
         }),
         async execute(
           _id        ,
-          params   
-                                  
-                         
-                              
-                             
-                                 
-                                  
-                                      
-                                       
-           
+          params
+
+
+
+
+
+
+
+
+
         ) {
           const res = await fetchBridge(api, profile, "/send_message", {
             method: "POST",
@@ -1623,7 +1627,7 @@ function registerProfileTools(api           , profile               , prefixOver
       optional
     );
 
-    if (allowPrivilegedTools) {
+    if (allowBackendFileTools) {
       api.registerTool(
         {
           name: `${prefix}_send_file`,
@@ -1646,18 +1650,18 @@ function registerProfileTools(api           , profile               , prefixOver
           }),
           async execute(
             _id        ,
-            params   
-                                    
-                                
-                               
-                                
-                                 
-                               
-                                   
-                                    
-                                        
-                                         
-             
+            params
+
+
+
+
+
+
+
+
+
+
+
           ) {
             const res = await fetchBridge(api, profile, "/send_file", {
               method: "POST",
@@ -1822,7 +1826,7 @@ function registerProfileTools(api           , profile               , prefixOver
       );
     }
 
-    if (allowPrivilegedTools) {
+    if (allowBackendFileTools) {
       api.registerTool(
         {
           name: `${prefix}_send_voice`,
@@ -1885,7 +1889,7 @@ function registerProfileTools(api           , profile               , prefixOver
       optional
     );
 
-    if (allowPrivilegedTools) {
+    if (allowBackendFileTools) {
       api.registerTool(
         {
           name: `${prefix}_send_sticker`,
@@ -2108,15 +2112,15 @@ function registerProfileTools(api           , profile               , prefixOver
             const res = await fetchBridge(api, profile, "/dialog_folders");
             if (!res.ok) return toolResult(formatBridgeError(res));
             const folders =
-              (res.data     
-                                 
-                               
-                                 
-                                    
-                                                 
-                                                 
-                                                
-                   
+              (res.data
+
+
+
+
+
+
+
+
                            )?.folders ?? [];
             const lines = folders.map((folder) => {
               const parts = [
@@ -2161,22 +2165,22 @@ function registerProfileTools(api           , profile               , prefixOver
           }),
           async execute(
             _id        ,
-            params   
-                                
-                            
-                                
-                                 
-                                     
-                               
-                                   
-                             
-                                      
-                                     
-                                         
-                                                    
-                                                     
-                                                     
-             
+            params
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
           ) {
             const res = await fetchBridge(api, profile, "/dialog_folders/upsert", {
               method: "POST",
@@ -2259,16 +2263,16 @@ function registerProfileTools(api           , profile               , prefixOver
         }),
         async execute(
           _id        ,
-          params   
-                                  
-                                       
-                           
-                                    
-                                   
-                                   
-                                     
-                                             
-           
+          params
+
+
+
+
+
+
+
+
+
         ) {
           const res = await fetchBridge(api, profile, "/promote_admin", {
             method: "POST",
@@ -2334,19 +2338,19 @@ function registerProfileTools(api           , profile               , prefixOver
         }),
         async execute(
           _id        ,
-          params   
-                                  
-                                       
-                                
-                                    
-                                  
-                                  
-                                       
-                                  
-                                  
-                                
-                                 
-           
+          params
+
+
+
+
+
+
+
+
+
+
+
+
         ) {
           const res = await fetchBridge(api, profile, "/ban_user", {
             method: "POST",
@@ -2406,7 +2410,7 @@ function registerProfileTools(api           , profile               , prefixOver
         }),
         async execute(
           _id        ,
-          params                                                                                                 
+          params
         ) {
           const res = await fetchBridge(api, profile, "/send_reaction", {
             method: "POST",
@@ -2468,8 +2472,8 @@ function registerProfileTools(api           , profile               , prefixOver
             return toolResult(formatBridgeError(res));
           }
           const sources =
-            (res.data     
-                                                                                                                           
+            (res.data
+
              )?.sources ?? [];
           const lines = sources.map((source) => {
             const tags = Array.from(new Set([source.type, source.is_forum ? "forum" : null].filter(Boolean))).join(
@@ -2592,7 +2596,7 @@ function registerProfileTools(api           , profile               , prefixOver
       }),
       async execute(
         _id        ,
-        params                                                                                       
+        params
       ) {
         const res = await fetchBridge(api, profile, "/search_messages", {
           method: "POST",
@@ -2618,7 +2622,7 @@ function registerProfileTools(api           , profile               , prefixOver
     optional
   );
 
-  if (allowPrivilegedTools) {
+  if (allowBackendFileTools) {
     api.registerTool(
       {
         name: `${prefix}_download_media`,
@@ -3091,15 +3095,15 @@ function registerProfileTools(api           , profile               , prefixOver
           return toolResult(formatBridgeError(res));
         }
         const topics =
-          (res.data     
-                            
-                                 
-                             
-                                     
-                               
-                               
-                               
-               
+          (res.data
+
+
+
+
+
+
+
+
            )?.topics ?? [];
         const lines = topics.map((topic) => {
           const flags = [
@@ -3151,7 +3155,7 @@ function registerProfileTools(api           , profile               , prefixOver
       }),
       async execute(
         _id        ,
-        params                                                                                                    
+        params
       ) {
         const limit = Math.min(50, Math.max(1, params.limit ?? 20));
         const peer = encodeURIComponent(String(params.peer));
