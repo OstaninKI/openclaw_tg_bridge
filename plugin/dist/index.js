@@ -11,6 +11,8 @@ const BRIDGE_UNAVAILABLE =
   "Telegram bridge is unavailable. Ensure the bridge service is running and session is configured.";
 const CHANNEL_ID = "telegram-user-bridge";
 const CHANNEL_LABEL = "Unofficial Telegram User DM";
+const DM_TARGET_PREFIXES = [CHANNEL_ID, "tguser", "tgdm"]         ;
+const DM_TARGET_PREFIX_PATTERN = /^(telegram-user-bridge|tguser|tgdm):/i;
 const TYPING_INTERVAL_MS = 4000;
 const DEFAULT_TYPING_MAX_DURATION_MS = 120000;
 
@@ -957,7 +959,24 @@ function stripDmTargetPrefix(target         )         {
   if (typeof target !== "string") {
     return "";
   }
-  return target.trim().replace(/^(telegram-user-bridge|tguser|tgdm):/i, "").trim();
+  return target.trim().replace(DM_TARGET_PREFIX_PATTERN, "").trim();
+}
+
+function normalizeDmMessagingTarget(target        )         {
+  return stripDmTargetPrefix(target);
+}
+
+function looksLikeDmTargetId(raw        , normalized         )          {
+  const rawTarget = typeof raw === "string" ? raw.trim() : "";
+  const normalizedTarget = typeof normalized === "string" && normalized.trim() ? normalized.trim() : rawTarget;
+  const peer = stripDmTargetPrefix(normalizedTarget);
+  if (!peer) {
+    return false;
+  }
+  if (DM_TARGET_PREFIX_PATTERN.test(rawTarget)) {
+    return !/\s/.test(peer);
+  }
+  return /^-?\d{5,}$/.test(peer) || /^@[a-zA-Z][a-zA-Z0-9_]{4,31}$/.test(peer);
 }
 
 function buildDmText(payload                                                            )         {
@@ -1411,6 +1430,14 @@ function registerDmChannel(api           )       {
       polls: false,
       nativeCommands: false,
       blockStreaming: true,
+    },
+    messaging: {
+      targetPrefixes: [...DM_TARGET_PREFIXES],
+      normalizeTarget: normalizeDmMessagingTarget,
+      targetResolver: {
+        looksLikeId: looksLikeDmTargetId,
+        hint: "<telegram-user-id|telegram-user-bridge:id|tgdm:id|tguser:id>",
+      },
     },
     reload: { configPrefixes: [`channels.${CHANNEL_ID}`, `plugins.entries.${CHANNEL_ID}`] },
     config: {

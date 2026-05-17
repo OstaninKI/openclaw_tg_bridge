@@ -36,6 +36,36 @@ test("plugin manifest declares static config metadata for owned channel", async 
   assert.ok(manifest.contracts.tools.includes("telegram_*_join_chat_by_link"));
 });
 
+test("plugin manifest declares every tool registered for documented profile set", async () => {
+  const manifest = JSON.parse(await readFile(new URL("./openclaw.plugin.json", import.meta.url), "utf8"));
+  const declaredTools = new Set(manifest.contracts?.tools ?? []);
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            profiles: [
+              { id: "owner_dm", label: "Owner DM", mode: "interactive", privilegedTools: true },
+              { id: "trusted_dm", label: "Trusted DM", mode: "interactive" },
+              { id: "trusted_alice_dm", label: "Trusted Alice DM", mode: "interactive" },
+              { id: "trusted_bob_dm", label: "Trusted Bob DM", mode: "interactive" },
+              { id: "trusted_svetlana_dm", label: "Trusted Svetlana DM", mode: "interactive" },
+              { id: "sources_ro", label: "Sources RO", mode: "sources_ro" },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  register(api);
+
+  const missing = Array.from(new Set(api.tools.map((tool) => tool.name)))
+    .filter((name) => !declaredTools.has(name))
+    .sort();
+  assert.deepEqual(missing, []);
+});
+
 test("package metadata points OpenClaw runtime to built JavaScript entrypoint", async () => {
   const pkg = JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
   const buildScript = await readFile(new URL("./scripts/build.mjs", import.meta.url), "utf8");
@@ -816,6 +846,20 @@ test("DM channel outbound rejects missing target with clear error", async () => 
     }),
     /outbound target is missing or invalid/i
   );
+});
+
+test("DM channel messaging recognizes prefixed current-conversation targets", async () => {
+  const api = createApi();
+  register(api);
+
+  const messaging = api.channels[0].messaging;
+  assert.deepEqual(messaging.targetPrefixes, ["telegram-user-bridge", "tguser", "tgdm"]);
+  assert.equal(messaging.normalizeTarget("telegram-user-bridge:123456789"), "123456789");
+  assert.equal(messaging.normalizeTarget("tgdm:123456789"), "123456789");
+  assert.equal(messaging.normalizeTarget("tguser:123456789"), "123456789");
+  assert.equal(messaging.targetResolver.looksLikeId("telegram-user-bridge:123456789"), true);
+  assert.equal(messaging.targetResolver.looksLikeId("tgdm:123456789"), true);
+  assert.equal(messaging.targetResolver.looksLikeId("not a telegram target"), false);
 });
 
 test("DM gateway startAccount stays pending until the monitor is stopped", async () => {
