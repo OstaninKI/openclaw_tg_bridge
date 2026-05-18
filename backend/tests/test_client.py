@@ -1,8 +1,10 @@
 """Unit tests for bridge client logic without real Telethon."""
 
 import asyncio
+import tempfile
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -810,6 +812,45 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
         self.mock_tg.get_messages.assert_awaited_once_with(entity, ids=71)
         self.mock_tg.download_media.assert_awaited_once_with(tg_message, file="/tmp/out.bin")
 
+    async def test_send_file_rejects_backend_path_outside_file_root(self) -> None:
+        with tempfile.TemporaryDirectory() as safe_dir, tempfile.NamedTemporaryFile() as outside:
+            bridge = self.create_bridge(write_allow_chat_ids=["me", "42"], file_root=safe_dir)
+            self.mock_tg.get_entity.return_value = SimpleNamespace(id=42, username="allowed")
+
+            with self.assertRaisesRegex(BridgeValidationError, "outside the allowed backend file directory"):
+                await bridge.send_file("42", outside.name)
+
+            self.mock_tg.send_file.assert_not_awaited()
+
+    async def test_send_file_allows_backend_path_inside_file_root(self) -> None:
+        with tempfile.TemporaryDirectory() as safe_dir:
+            root = Path(safe_dir)
+            file_path = root / "allowed.txt"
+            file_path.write_text("ok", encoding="utf-8")
+            bridge = self.create_bridge(write_allow_chat_ids=["me", "42"], file_root=safe_dir)
+            entity = SimpleNamespace(id=42, username="allowed")
+            self.mock_tg.get_entity.return_value = entity
+            self.mock_tg.send_file.return_value = SimpleNamespace(id=72)
+
+            with patch("openclaw_tg_bridge.client.asyncio.sleep", new=AsyncMock()):
+                result = await bridge.send_file("42", str(file_path))
+
+            self.assertTrue(result["ok"])
+            self.mock_tg.send_file.assert_awaited_once()
+            self.assertEqual(self.mock_tg.send_file.await_args.args[0], entity)
+            self.assertEqual(self.mock_tg.send_file.await_args.args[1], str(file_path.resolve()))
+
+    async def test_download_media_rejects_output_path_outside_file_root(self) -> None:
+        with tempfile.TemporaryDirectory() as safe_dir:
+            outside_path = Path(tempfile.gettempdir()) / "outside-download.bin"
+            bridge = self.create_bridge(allow_chat_ids=["42"], write_allow_chat_ids=["me", "42"], file_root=safe_dir)
+            self.mock_tg.get_entity.return_value = SimpleNamespace(id=42, username="allowed")
+
+            with self.assertRaisesRegex(BridgeValidationError, "outside the allowed backend file directory"):
+                await bridge.download_media("42", 71, output_path=str(outside_path))
+
+            self.mock_tg.download_media.assert_not_awaited()
+
     async def test_download_media_for_inbox_uses_read_scope_only(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"], write_allow_chat_ids=["42"])
         entity = SimpleNamespace(id=42, username="allowed")
@@ -927,6 +968,57 @@ class TestBridgeClient(unittest.IsolatedAsyncioTestCase):
             contacts = await bridge.list_contacts()
 
         self.assertEqual(contacts, [{"id": 42, "username": "allowed", "title": "Allowed", "phone": "123"}])
+
+    async def test_resolve_username_uses_read_scope(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        self.mock_tg.get_entity.return_value = SimpleNamespace(id=99, username="blocked")
+
+        with self.assertRaisesRegex(BridgeForbiddenError, "Resolving username is not allowed"):
+            await bridge.resolve_username("@blocked")
+
+    async def test_resolve_username_allows_matching_read_scope(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        self.mock_tg.get_entity.return_value = SimpleNamespace(id=42, username="allowed", first_name="Allowed")
+
+        result = await bridge.resolve_username("@allowed")
+
+        self.assertEqual(
+            result,
+            {
+                "id": 42,
+                "username": "allowed",
+                "title": "Allowed",
+                "type": "direct",
+            },
+        )
+
+    async def test_get_user_status_uses_read_scope(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        self.mock_tg.get_entity.return_value = SimpleNamespace(id=99, username="blocked")
+
+        with self.assertRaisesRegex(BridgeForbiddenError, "Reading user status is not allowed"):
+            await bridge.get_user_status("@blocked")
+
+    async def test_get_user_status_allows_matching_read_scope(self) -> None:
+        bridge = self.create_bridge(allow_chat_ids=["42"])
+        self.mock_tg.get_entity.return_value = SimpleNamespace(
+            id=42,
+            username="allowed",
+            status=SimpleNamespace(was_online=datetime(2026, 5, 18, tzinfo=timezone.utc), expires=None),
+        )
+
+        result = await bridge.get_user_status("@allowed")
+
+        self.assertEqual(
+            result,
+            {
+                "id": 42,
+                "username": "allowed",
+                "status_type": "SimpleNamespace",
+                "was_online": "2026-05-18T00:00:00+00:00",
+                "expires": None,
+            },
+        )
 
     async def test_list_contacts_requires_self_write_access(self) -> None:
         bridge = self.create_bridge(allow_chat_ids=["42"])

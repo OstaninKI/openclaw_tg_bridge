@@ -663,18 +663,51 @@ def _require_self_write(scope: BridgeScope, *, detail: str) -> None:
         raise BridgeForbiddenError(detail)
 
 
-def _validate_backend_file_path(file_path: str) -> str:
+def _resolve_file_root(file_root: str | Path | None) -> Path | None:
+    if file_root is None:
+        return None
+    raw = str(file_root).strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
+def _resolve_path_inside_root(path: Path, root: Path) -> Path:
+    resolved = path.expanduser().resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise BridgeValidationError("Backend path is outside the allowed backend file directory.") from exc
+    return resolved
+
+
+def _validate_backend_file_path(file_path: str, *, file_root: Path | None = None) -> str:
     normalized = str(file_path or "").strip()
     if not normalized:
         raise BridgeValidationError("file_path is required.")
     path = Path(normalized)
+    if file_root is not None:
+        path = _resolve_path_inside_root(path, file_root)
     if not path.exists():
         raise BridgeValidationError("File does not exist on the backend host.")
     if not path.is_file():
         raise BridgeValidationError("Backend path exists but is not a regular file.")
     if not os.access(path, os.R_OK):
         raise BridgeValidationError("File is not readable by the backend service.")
-    return normalized
+    return str(path)
+
+
+def _validate_backend_output_path(output_path: str | None, *, file_root: Path | None = None) -> str | None:
+    if output_path is None:
+        return None
+    normalized = str(output_path).strip()
+    if not normalized:
+        return None
+    if file_root is None:
+        return normalized
+    path = Path(normalized)
+    path = _resolve_path_inside_root(path, file_root)
+    return str(path)
 
 
 def _extract_flood_wait_seconds(exc: BaseException) -> int | None:
@@ -788,6 +821,7 @@ class BridgeClient:
         write_deny_chat_ids: list[str] | None = None,
         rpc_timeout_sec: float = 30.0,
         flood_wait_max_sleep_sec: float = 3.0,
+        file_root: str | Path | None = None,
     ) -> None:
         self._client = client
         self._policy = build_policy(
@@ -801,6 +835,7 @@ class BridgeClient:
         self._send_lock = asyncio.Lock()
         self._rpc_timeout_sec = max(1.0, rpc_timeout_sec)
         self._flood_wait_max_sleep_sec = max(0.0, flood_wait_max_sleep_sec)
+        self._file_root = _resolve_file_root(file_root)
         self._observed_peer_entities: OrderedDict[str, Any] = OrderedDict()
         self._is_premium: bool | None = None
 
@@ -1070,7 +1105,7 @@ class BridgeClient:
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
         _require_self_write(policy.write_scope, detail="Writing backend-host files is not allowed for this profile.")
-        file_path = _validate_backend_file_path(file_path)
+        file_path = _validate_backend_file_path(file_path, file_root=self._file_root)
         async with self._send_lock:
             entity, _ = await self._resolve_scoped_entity(
                 peer,
@@ -1114,7 +1149,7 @@ class BridgeClient:
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
         _require_self_write(policy.write_scope, detail="Writing backend-host files is not allowed for this profile.")
-        file_path = _validate_backend_file_path(file_path)
+        file_path = _validate_backend_file_path(file_path, file_root=self._file_root)
         async with self._send_lock:
             entity, _ = await self._resolve_scoped_entity(
                 peer,
@@ -1142,7 +1177,7 @@ class BridgeClient:
     ) -> dict[str, Any]:
         policy = self._resolve_policy(policy_overrides)
         _require_self_write(policy.write_scope, detail="Writing backend-host files is not allowed for this profile.")
-        file_path = _validate_backend_file_path(file_path)
+        file_path = _validate_backend_file_path(file_path, file_root=self._file_root)
         async with self._send_lock:
             entity, _ = await self._resolve_scoped_entity(
                 peer,
@@ -1439,6 +1474,7 @@ class BridgeClient:
             raise BridgeValidationError("Message not found.")
         if getattr(tg_message, "media", None) is None:
             raise BridgeValidationError("Message does not contain downloadable media.")
+        output_path = _validate_backend_output_path(output_path, file_root=self._file_root)
         file_path = await self._call_telegram(
             self._client.download_media,
             tg_message,
@@ -2087,8 +2123,18 @@ class BridgeClient:
         )
         return {"ok": True, "folder_id": folder_id}
 
-    async def resolve_username(self, username: str) -> dict[str, Any]:
-        entity = await self._resolve_entity(username, action="resolve username")
+    async def resolve_username(
+        self,
+        username: str,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            username,
+            action="resolving username",
+            scope=policy.read_scope,
+        )
         return {
             "id": getattr(entity, "id", None),
             "username": getattr(entity, "username", None),
@@ -2096,8 +2142,18 @@ class BridgeClient:
             "type": _resolve_chat_type(entity),
         }
 
-    async def get_user_status(self, peer: str | int) -> dict[str, Any]:
-        entity = await self._resolve_entity(peer, action="read user status")
+    async def get_user_status(
+        self,
+        peer: str | int,
+        *,
+        policy_overrides: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        policy = self._resolve_policy(policy_overrides)
+        entity, _ = await self._resolve_scoped_entity(
+            peer,
+            action="reading user status",
+            scope=policy.read_scope,
+        )
         status = getattr(entity, "status", None)
         payload = {
             "id": getattr(entity, "id", None),

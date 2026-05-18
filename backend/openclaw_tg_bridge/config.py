@@ -74,6 +74,28 @@ def _parse_list_header(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _narrow_allow_scope(base: list[str] | None, requested: list[str]) -> list[str]:
+    if base is None:
+        return list(requested)
+    if "*" in requested:
+        return list(base)
+    if "*" in base:
+        return list(requested)
+
+    requested_set = set(requested)
+    return [item for item in base if item in requested_set]
+
+
+def _merge_deny_scope(base: list[str] | None, requested: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in [*(base or []), *requested]:
+        if item not in seen:
+            merged.append(item)
+            seen.add(item)
+    return merged
+
+
 def _deep_merge_dicts(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in extra.items():
@@ -110,6 +132,7 @@ def load_config() -> dict[str, Any]:
     sources_inventory_path = os.environ.get("TELEGRAM_SOURCES_INVENTORY_PATH", "").strip()
     inbox_state_path = os.environ.get("TELEGRAM_INBOX_STATE_PATH", "").strip()
     dm_media_path = os.environ.get("TELEGRAM_DM_MEDIA_PATH", "").strip()
+    file_root = os.environ.get("TELEGRAM_BACKEND_FILE_ROOT", "").strip()
     dm_auto_download_media = _get_bool("TELEGRAM_DM_AUTO_DOWNLOAD_MEDIA", True)
     lock_path = os.environ.get("TELEGRAM_LOCK_PATH", "").strip()
     sources_refresh_sec = _get_float("TELEGRAM_SOURCES_REFRESH_SEC") or 300.0
@@ -150,6 +173,7 @@ def load_config() -> dict[str, Any]:
         "sources_inventory_path": sources_inventory_path or str(default_state_dir / "sources_inventory.json"),
         "inbox_state_path": inbox_state_path or str(default_state_dir / "dm_inbox_state.json"),
         "dm_media_path": dm_media_path or str(default_state_dir / "dm_inbox_media"),
+        "file_root": file_root or str(default_state_dir / "files"),
         "dm_auto_download_media": dm_auto_download_media,
         "lock_path": lock_path or str(default_state_dir / "bridge.lock"),
         "sources_refresh_sec": max(0.0, sources_refresh_sec),
@@ -302,15 +326,14 @@ def resolve_effective_policy(
         if "excludeUsernames" in sources_policy:
             merged["sources_exclude_usernames"] = list(sources_policy["excludeUsernames"] or [])
 
-    for key in (
-        "reply_delay_sec",
-        "reply_delay_max_sec",
-        "read_allow_chat_ids",
-        "read_deny_chat_ids",
-        "write_allow_chat_ids",
-        "write_deny_chat_ids",
-    ):
+    for key in ("reply_delay_sec", "reply_delay_max_sec"):
         if key in request_overrides:
             merged[key] = request_overrides[key]
+    for key in ("read_allow_chat_ids", "write_allow_chat_ids"):
+        if key in request_overrides:
+            merged[key] = _narrow_allow_scope(merged[key], request_overrides[key])
+    for key in ("read_deny_chat_ids", "write_deny_chat_ids"):
+        if key in request_overrides:
+            merged[key] = _merge_deny_scope(merged[key], request_overrides[key])
 
     return merged

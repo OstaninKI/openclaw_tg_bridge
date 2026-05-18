@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from openclaw_tg_bridge.auth import resolve_local_session_file, write_session_string
 from openclaw_tg_bridge.config import (
@@ -12,6 +13,20 @@ from openclaw_tg_bridge.config import (
     resolve_effective_policy,
     resolve_session_path,
 )
+
+
+def _base_policy_config(**overrides: Any) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "reply_delay_sec": 1.0,
+        "reply_delay_max_sec": None,
+        "allow_chat_ids": ["*"],
+        "deny_chat_ids": [],
+        "write_allow_chat_ids": [],
+        "write_deny_chat_ids": [],
+        "policy_default_profile": None,
+    }
+    config.update(overrides)
+    return config
 
 
 class TestConfigHelpers(unittest.TestCase):
@@ -118,6 +133,43 @@ class TestConfigHelpers(unittest.TestCase):
             self.assertTrue(shared_effective["sources_auto_discover"])
             self.assertEqual(shared_effective["sources_include_types"], ["channel", "supergroup"])
             self.assertEqual(shared_effective["sources_exclude_usernames"], ["private_feed"])
+
+    def test_request_write_allow_all_cannot_expand_base_scope(self) -> None:
+        effective = resolve_effective_policy(
+            _base_policy_config(write_allow_chat_ids=["123"]),
+            PolicyStore(None),
+            {"write_allow_chat_ids": ["*"]},
+        )
+
+        self.assertEqual(effective["write_allow_chat_ids"], ["123"])
+
+    def test_request_write_allow_narrows_base_scope(self) -> None:
+        effective = resolve_effective_policy(
+            _base_policy_config(write_allow_chat_ids=["123", "456"]),
+            PolicyStore(None),
+            {"write_allow_chat_ids": ["123"]},
+        )
+
+        self.assertEqual(effective["write_allow_chat_ids"], ["123"])
+
+    def test_request_read_allow_narrows_unbounded_base_scope(self) -> None:
+        effective = resolve_effective_policy(
+            _base_policy_config(allow_chat_ids=[]),
+            PolicyStore(None),
+            {"read_allow_chat_ids": ["123"]},
+        )
+
+        self.assertEqual(effective["read_allow_chat_ids"], ["123"])
+
+    def test_request_deny_overrides_cannot_remove_base_denies(self) -> None:
+        effective = resolve_effective_policy(
+            _base_policy_config(deny_chat_ids=["blocked"], write_deny_chat_ids=["no-write"]),
+            PolicyStore(None),
+            {"read_deny_chat_ids": [], "write_deny_chat_ids": ["extra-no-write"]},
+        )
+
+        self.assertEqual(effective["read_deny_chat_ids"], ["blocked"])
+        self.assertEqual(effective["write_deny_chat_ids"], ["no-write", "extra-no-write"])
 
     def test_unknown_profile_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

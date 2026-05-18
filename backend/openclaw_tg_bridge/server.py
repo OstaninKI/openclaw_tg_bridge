@@ -269,6 +269,7 @@ async def _create_client() -> BridgeClient:
         write_deny_chat_ids=cfg["write_deny_chat_ids"] or None,
         rpc_timeout_sec=cfg["rpc_timeout_sec"],
         flood_wait_max_sleep_sec=cfg["flood_wait_max_sleep_sec"],
+        file_root=cfg.get("file_root"),
     )
 
 
@@ -1404,10 +1405,11 @@ async def unblock_user(request: Request, body: ContactPeerBody):
 
 
 @app.get("/resolve_username")
-async def resolve_username(username: str):
+async def resolve_username(request: Request, username: str):
     bridge = get_bridge()
     try:
-        return await bridge.resolve_username(username)
+        overrides = await resolve_request_policy(request)
+        return await bridge.resolve_username(username, policy_overrides=overrides)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except BridgeError as exc:
@@ -1418,10 +1420,11 @@ async def resolve_username(username: str):
 
 
 @app.get("/user_status")
-async def user_status(peer: str | int):
+async def user_status(request: Request, peer: str | int):
     bridge = get_bridge()
     try:
-        return await bridge.get_user_status(peer)
+        overrides = await resolve_request_policy(request)
+        return await bridge.get_user_status(peer, policy_overrides=overrides)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except BridgeError as exc:
@@ -2094,6 +2097,7 @@ async def _server_qr_flow(ctx: Any) -> None:
             write_deny_chat_ids=cfg["write_deny_chat_ids"] or None,
             rpc_timeout_sec=cfg["rpc_timeout_sec"],
             flood_wait_max_sleep_sec=cfg["flood_wait_max_sleep_sec"],
+            file_root=cfg.get("file_root"),
         )
         client.add_event_handler(_on_new_dm, telethon_events.NewMessage(incoming=True))
         _bridge = new_bridge

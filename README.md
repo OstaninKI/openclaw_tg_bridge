@@ -363,6 +363,7 @@ Notes:
 - `write.allow: []` means **write denied**.
 - To allow writing later, OpenClaw can edit this file and add a chat id or username to `write.allow`.
 - Add `"me"` to `write.allow` only for profiles that should be allowed to use backend-host file tools or self-account/contact mutation tools.
+- Backend-host file tools are restricted to `TELEGRAM_BACKEND_FILE_ROOT` (default: the `files/` directory next to the policy file). Put files there before using `send_file`, `send_voice`, or `send_sticker`; `download_media` output paths must also stay under that directory.
 - The backend reloads the JSON file automatically on the next request.
 
 ### 5. Configure the plugin
@@ -896,6 +897,7 @@ All `/auth/qr/*` endpoints require the same `TELEGRAM_BRIDGE_API_TOKEN` Bearer t
 | `TELEGRAM_INBOX_STATE_PATH` | Path to JSON file with acknowledged inbound DM cursors |
 | `TELEGRAM_DM_AUTO_DOWNLOAD_MEDIA` | Auto-download inbound DM attachments during `/dm/inbox/poll` (default `true`) |
 | `TELEGRAM_DM_MEDIA_PATH` | Directory for auto-downloaded inbound DM attachments |
+| `TELEGRAM_BACKEND_FILE_ROOT` | Allowed directory for backend-host file tools; defaults to `files/` next to the policy file |
 | `TELEGRAM_SOURCES_REFRESH_SEC` | Minimum delay between automatic inventory refreshes |
 | `TELEGRAM_SOURCES_DIALOG_LIMIT` | How many dialogs to scan when refreshing inventory |
 | `TELEGRAM_BRIDGE_API_TOKEN` | Optional bearer token for plugin/backend auth |
@@ -927,7 +929,7 @@ Each profile can define:
 
 These are backend-enforced overrides on top of the JSON policy file. If omitted, the backend uses the policy file and environment defaults.
 
-`backendFileTools: true` exposes only backend-host file/media tools for that profile: `send_file`, `send_voice`, `send_sticker`, and `download_media`. `privilegedTools: true` remains the broader option and exposes backend-host file/media tools plus self-account/contact mutation tools. Profiles without either flag still get the normal chat/message/admin reading surface, but not file/download/contact/create/invite/leave flows. Join-by-link and dialog-folder flows are additionally owner-only in plugin code. Any profile that uses backend-host file/media tools should also include `"me"` in backend `write.allow`.
+`backendFileTools: true` exposes only backend-host file/media tools for that profile: `send_file`, `send_voice`, `send_sticker`, and `download_media`. `privilegedTools: true` remains the broader option and exposes backend-host file/media tools plus self-account/contact mutation tools. Profiles without either flag still get the normal chat/message/admin reading surface, but not file/download/contact/create/invite/leave flows. Join-by-link and dialog-folder flows are additionally owner-only in plugin code. Any profile that uses backend-host file/media tools should also include `"me"` in backend `write.allow`. Backend-host file paths are limited to `TELEGRAM_BACKEND_FILE_ROOT`.
 
 For event-driven DMs, also configure `channels.telegram-user-bridge.accounts.<id>` with:
 

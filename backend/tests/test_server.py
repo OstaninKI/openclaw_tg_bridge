@@ -20,7 +20,9 @@ try:
         _enrich_dm_events_with_downloaded_media,
         _source_entry_matches_policy,
         mark_dm_read,
+        resolve_username,
         send_dm_typing,
+        user_status,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "fastapi":
@@ -35,7 +37,9 @@ except ModuleNotFoundError as exc:
     _enrich_dm_events_with_downloaded_media = None
     _source_entry_matches_policy = None
     mark_dm_read = None
+    resolve_username = None
     send_dm_typing = None
+    user_status = None
 
 
 @unittest.skipIf(_apply_source_discovery is None, "fastapi is not installed in this test environment")
@@ -163,6 +167,32 @@ class TestServerSourceDiscovery(unittest.IsolatedAsyncioTestCase):
             max_message_id=55,
             policy_overrides=policy,
         )
+
+    async def test_resolve_username_passes_request_policy_to_bridge(self) -> None:
+        bridge = AsyncMock()
+        bridge.resolve_username.return_value = {"id": 42, "username": "allowed"}
+        policy = {"read_allow_chat_ids": ["42"]}
+
+        with patch("openclaw_tg_bridge.server.get_bridge", return_value=bridge), patch(
+            "openclaw_tg_bridge.server.resolve_request_policy", new=AsyncMock(return_value=policy)
+        ):
+            result = await resolve_username(object(), "@allowed")
+
+        self.assertEqual(result, {"id": 42, "username": "allowed"})
+        bridge.resolve_username.assert_awaited_once_with("@allowed", policy_overrides=policy)
+
+    async def test_user_status_passes_request_policy_to_bridge(self) -> None:
+        bridge = AsyncMock()
+        bridge.get_user_status.return_value = {"id": 42, "status_type": "UserStatusOnline"}
+        policy = {"read_allow_chat_ids": ["42"]}
+
+        with patch("openclaw_tg_bridge.server.get_bridge", return_value=bridge), patch(
+            "openclaw_tg_bridge.server.resolve_request_policy", new=AsyncMock(return_value=policy)
+        ):
+            result = await user_status(object(), "@allowed")
+
+        self.assertEqual(result, {"id": 42, "status_type": "UserStatusOnline"})
+        bridge.get_user_status.assert_awaited_once_with("@allowed", policy_overrides=policy)
 
     async def test_mark_dm_read_rejects_unmatched_sender(self) -> None:
         bridge = AsyncMock()
