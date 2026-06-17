@@ -15,6 +15,17 @@ const DM_TARGET_PREFIXES = [CHANNEL_ID, "tguser", "tgdm"]         ;
 const DM_TARGET_PREFIX_PATTERN = /^(telegram-user-bridge|tguser|tgdm):/i;
 const TYPING_INTERVAL_MS = 4000;
 const DEFAULT_TYPING_MAX_DURATION_MS = 120000;
+const STABLE_PROFILE_TOOL_PREFIX = "telegram";
+const LEGACY_PROFILE_TOOL_ALIAS_SLUGS = new Set([
+  "owner",
+  "owner_dm",
+  "sources_ro",
+  "trusted_alice_dm",
+  "trusted_bob_dm",
+  "trusted_dm",
+  "trusted_svetlana_dm",
+  "user",
+]);
 
 const HEADER_POLICY_PROFILE = "X-OpenClaw-Policy-Profile";
 const HEADER_REPLY_DELAY_SEC = "X-OpenClaw-Reply-Delay-Sec";
@@ -518,6 +529,108 @@ function formatBridgeError(res                )         {
 
 
 
+
+
+
+
+
+
+
+
+function withProfileParameter(parameters                         )                          {
+  return {
+    ...parameters,
+    properties: {
+      profile: Type.String({ description: "Configured Telegram bridge profile id, for example owner_dm" }),
+      ...((parameters.properties                                       ) ?? {}),
+    },
+    required: Array.from(new Set(["profile", ...((parameters.required                        ) ?? [])])),
+  };
+}
+
+function resolveConfiguredProfile(config              , profileId         )                       {
+  if (typeof profileId !== "string" || !profileId.trim()) return null;
+  const wanted = profileId.trim();
+  return config.profiles.find((profile) => profile.id === wanted) ?? null;
+}
+
+function createProfileTool(api           , profile               , toolName        )                        {
+  const tools                   = [];
+  registerProfileTools(
+    {
+      ...api,
+      registerTool(tool         ) {
+        tools.push(tool                  );
+      },
+    },
+    profile,
+    STABLE_PROFILE_TOOL_PREFIX
+  );
+  return tools.find((tool) => tool.name === toolName) ?? null;
+}
+
+function registerStableProfileTools(api           , config              )       {
+  if (config.profiles.length !== 1) return;
+  const templateTools                                                                 = [];
+  const templateApi = {
+    ...api,
+    registerTool: (tool         , opts                         ) => {
+      const registered = tool                  ;
+      if (!templateTools.some((item) => item.tool.name === registered.name)) {
+        templateTools.push({ tool: registered, opts });
+      }
+    },
+  };
+  registerProfileTools(
+    templateApi,
+    {
+      id: "owner",
+      label: "selected Telegram profile",
+      mode: "interactive",
+      backendFileTools: true,
+      privilegedTools: true,
+    },
+    STABLE_PROFILE_TOOL_PREFIX
+  );
+  registerProfileTools(
+    templateApi,
+    {
+      id: "sources_ro",
+      label: "selected Telegram profile",
+      mode: "sources_ro",
+      backendFileTools: false,
+      privilegedTools: false,
+    },
+    STABLE_PROFILE_TOOL_PREFIX
+  );
+
+  for (const { tool, opts } of templateTools) {
+    api.registerTool(
+      {
+        ...tool,
+        parameters: withProfileParameter(tool.parameters),
+        async execute(id        , params                         ) {
+          const profileId = typeof params.profile === "string" ? params.profile.trim() : "";
+          const profile = resolveConfiguredProfile(getConfig(api), profileId);
+          if (!profile) {
+            return toolResult(`Unknown Telegram profile: ${profileId || "(missing)"}.`);
+          }
+          const profileTool = createProfileTool(api, profile, tool.name);
+          if (!profileTool) {
+            return toolResult(`Telegram profile ${profile.id} is not allowed to use ${tool.name}.`);
+          }
+          const { profile: _profile, ...toolParams } = params;
+          return profileTool.execute(id, toolParams);
+        },
+      },
+      opts
+    );
+  }
+}
+
+function shouldRegisterLegacyProfileAliases(profile               )          {
+  return LEGACY_PROFILE_TOOL_ALIAS_SLUGS.has(slugifyToolId(profile.id));
+}
 
 
 
@@ -3200,6 +3313,7 @@ export const __test = {
 export default function register(api           ) {
   const config = getConfig(api);
   registerDmChannel(api);
+  registerStableProfileTools(api, config);
   const profileSlugs = new Set(config.profiles.map((profile) => slugifyToolId(profile.id)));
   const registeredPrefixes = new Set        ();
   const registerPrefix = (profile               , prefix        )       => {
@@ -3208,6 +3322,7 @@ export default function register(api           ) {
     registeredPrefixes.add(prefix);
   };
   for (const profile of config.profiles) {
+    if (!shouldRegisterLegacyProfileAliases(profile)) continue;
     const primaryPrefix = `telegram_${slugifyToolId(profile.id)}`;
     registerPrefix(profile, primaryPrefix);
     const ownerCompatAlias = resolveOwnerCompatAliasSlug(profile, profileSlugs);

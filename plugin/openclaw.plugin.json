@@ -39,22 +39,30 @@
       },
       "allowFrom": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Readable chat ids/usernames enforced by the backend in legacy single-context mode"
       },
       "denyFrom": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Denied read chat ids/usernames enforced by the backend in legacy single-context mode"
       },
       "writeTo": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Writable chat ids/usernames enforced by the backend in legacy single-context mode; empty means write denied"
       },
       "denyWriteTo": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Denied write chat ids/usernames enforced by the backend in legacy single-context mode"
       },
       "profiles": {
@@ -63,14 +71,28 @@
         "items": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["id"],
+          "required": [
+            "id"
+          ],
           "properties": {
-            "id": { "type": "string", "description": "Stable tool/profile id, for example owner_dm, trusted_dm, sources_ro" },
-            "label": { "type": "string", "description": "Human-readable label used in tool descriptions" },
-            "enabled": { "type": "boolean", "default": true },
+            "id": {
+              "type": "string",
+              "description": "Stable tool/profile id, for example owner_dm, trusted_dm, sources_ro"
+            },
+            "label": {
+              "type": "string",
+              "description": "Human-readable label used in tool descriptions"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
             "mode": {
               "type": "string",
-              "enum": ["interactive", "sources_ro"],
+              "enum": [
+                "interactive",
+                "sources_ro"
+              ],
               "default": "interactive",
               "description": "interactive = dialogs/messages/send tools, sources_ro = auto-discovered read-only source tools"
             },
@@ -84,28 +106,120 @@
               "default": false,
               "description": "Expose only backend-host file/media tools for this profile. This enables send_file, send_voice, send_sticker, and download_media without contact/account mutation tools."
             },
-            "policyProfile": { "type": "string", "description": "Backend policy profile to use for this context" },
-            "replyDelaySec": { "type": "number" },
-            "replyDelayMaxSec": { "type": "number" },
-            "allowFrom": { "type": "array", "items": { "type": "string" } },
-            "denyFrom": { "type": "array", "items": { "type": "string" } },
-            "writeTo": { "type": "array", "items": { "type": "string" } },
-            "denyWriteTo": { "type": "array", "items": { "type": "string" } }
+            "policyProfile": {
+              "type": "string",
+              "description": "Backend policy profile to use for this context"
+            },
+            "replyDelaySec": {
+              "type": "number"
+            },
+            "replyDelayMaxSec": {
+              "type": "number"
+            },
+            "allowFrom": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "denyFrom": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "writeTo": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "denyWriteTo": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         }
       }
     }
   },
   "uiHints": {
-    "baseUrl": { "label": "Bridge URL", "placeholder": "http://127.0.0.1:8765" },
-    "apiToken": { "label": "API Token", "sensitive": true },
-    "timeoutMs": { "label": "Timeout (ms)" },
-    "policyProfile": { "label": "Policy profile" },
-    "replyDelaySec": { "label": "Reply delay (sec)" },
-    "replyDelayMaxSec": { "label": "Reply delay max (sec)" }
+    "baseUrl": {
+      "label": "Bridge URL",
+      "placeholder": "http://127.0.0.1:8765"
+    },
+    "apiToken": {
+      "label": "API Token",
+      "sensitive": true
+    },
+    "timeoutMs": {
+      "label": "Timeout (ms)"
+    },
+    "policyProfile": {
+      "label": "Policy profile"
+    },
+    "replyDelaySec": {
+      "label": "Reply delay (sec)"
+    },
+    "replyDelayMaxSec": {
+      "label": "Reply delay max (sec)"
+    }
   },
   "contracts": {
     "tools": [
+      "telegram_delete_dialog_folder",
+      "telegram_join_chat_by_link",
+      "telegram_list_dialog_folders",
+      "telegram_list_sources",
+      "telegram_sync_sources",
+      "telegram_upsert_dialog_folder",
+      "telegram_add_contact",
+      "telegram_ban_user",
+      "telegram_block_user",
+      "telegram_create_channel",
+      "telegram_create_group",
+      "telegram_delete_contact",
+      "telegram_delete_message",
+      "telegram_demote_admin",
+      "telegram_download_media",
+      "telegram_edit_message",
+      "telegram_forward_message",
+      "telegram_get_admins",
+      "telegram_get_banned_users",
+      "telegram_get_blocked_users",
+      "telegram_get_chat",
+      "telegram_get_dialogs",
+      "telegram_get_history",
+      "telegram_get_invite_link",
+      "telegram_get_media_info",
+      "telegram_get_message",
+      "telegram_get_message_reactions",
+      "telegram_get_messages",
+      "telegram_get_participants",
+      "telegram_get_pinned_messages",
+      "telegram_get_recent_actions",
+      "telegram_get_user_status",
+      "telegram_invite_to_group",
+      "telegram_leave_chat",
+      "telegram_list_contacts",
+      "telegram_list_topics",
+      "telegram_promote_admin",
+      "telegram_remove_reaction",
+      "telegram_resolve_username",
+      "telegram_search_contacts",
+      "telegram_search_messages",
+      "telegram_search_public_chats",
+      "telegram_send_file",
+      "telegram_send_location",
+      "telegram_send_message",
+      "telegram_send_reaction",
+      "telegram_send_sticker",
+      "telegram_send_voice",
+      "telegram_transcribe_voice",
+      "telegram_unban_user",
+      "telegram_unblock_user",
       "telegram_*_send_message",
       "telegram_*_send_file",
       "telegram_*_send_location",
@@ -363,6 +477,7 @@
       "telegram_trusted_svetlana_dm_ban_user",
       "telegram_trusted_svetlana_dm_delete_message",
       "telegram_trusted_svetlana_dm_demote_admin",
+      "telegram_trusted_svetlana_dm_download_media",
       "telegram_trusted_svetlana_dm_edit_message",
       "telegram_trusted_svetlana_dm_forward_message",
       "telegram_trusted_svetlana_dm_get_admins",
@@ -384,14 +499,19 @@
       "telegram_trusted_svetlana_dm_resolve_username",
       "telegram_trusted_svetlana_dm_search_messages",
       "telegram_trusted_svetlana_dm_search_public_chats",
+      "telegram_trusted_svetlana_dm_send_file",
       "telegram_trusted_svetlana_dm_send_location",
       "telegram_trusted_svetlana_dm_send_message",
       "telegram_trusted_svetlana_dm_send_reaction",
+      "telegram_trusted_svetlana_dm_send_sticker",
+      "telegram_trusted_svetlana_dm_send_voice",
       "telegram_trusted_svetlana_dm_transcribe_voice",
       "telegram_trusted_svetlana_dm_unban_user"
     ]
   },
-  "channels": ["telegram-user-bridge"],
+  "channels": [
+    "telegram-user-bridge"
+  ],
   "channelConfigs": {
     "telegram-user-bridge": {
       "label": "Unofficial Telegram User DM",
@@ -477,27 +597,37 @@
                 },
                 "allowFrom": {
                   "type": "array",
-                  "items": { "type": "string" },
+                  "items": {
+                    "type": "string"
+                  },
                   "description": "Readable inbound DM sender ids/usernames enforced by the backend"
                 },
                 "groupAllowFrom": {
                   "type": "array",
-                  "items": { "type": "string" },
+                  "items": {
+                    "type": "string"
+                  },
                   "description": "Accepted for OpenClaw doctor compatibility. This DM-only channel ignores group sender allowlists."
                 },
                 "denyFrom": {
                   "type": "array",
-                  "items": { "type": "string" },
+                  "items": {
+                    "type": "string"
+                  },
                   "description": "Denied inbound DM sender ids/usernames enforced by the backend"
                 },
                 "writeTo": {
                   "type": "array",
-                  "items": { "type": "string" },
+                  "items": {
+                    "type": "string"
+                  },
                   "description": "Writable DM target ids/usernames enforced by the backend"
                 },
                 "denyWriteTo": {
                   "type": "array",
-                  "items": { "type": "string" },
+                  "items": {
+                    "type": "string"
+                  },
                   "description": "Denied writable DM target ids/usernames enforced by the backend"
                 }
               }
@@ -506,10 +636,16 @@
         }
       },
       "uiHints": {
-        "defaultAccountId": { "label": "Default account" },
-        "accounts": { "label": "Accounts" }
+        "defaultAccountId": {
+          "label": "Default account"
+        },
+        "accounts": {
+          "label": "Accounts"
+        }
       }
     }
   },
-  "skills": ["./skills/telegram-user"]
+  "skills": [
+    "./skills/telegram-user"
+  ]
 }

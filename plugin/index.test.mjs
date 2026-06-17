@@ -71,6 +71,64 @@ test("plugin manifest declares every tool registered for documented profile set"
   assert.deepEqual(missing, []);
 });
 
+test("stable profile tools support arbitrary configured profile ids without dynamic aliases", async () => {
+  const api = createApi({
+    plugins: {
+      entries: {
+        "telegram-user-bridge": {
+          config: {
+            baseUrl: "http://127.0.0.1:8765/",
+            profiles: [
+              {
+                id: "trusted_ivan_dm",
+                label: "Trusted Ivan",
+                mode: "interactive",
+                backendFileTools: true,
+                policyProfile: "trusted_ivan_dm",
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+  register(api);
+
+  assert.ok(getTool(api, "telegram_send_file"));
+  assert.equal(getTool(api, "telegram_trusted_ivan_dm_send_file"), undefined);
+
+  let capturedInit = undefined;
+  globalThis.fetch = async (_url, init) => {
+    capturedInit = init;
+    return new Response(JSON.stringify({ ok: true, message_id: 123 }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const result = await getTool(api, "telegram_send_file").execute("1", {
+    profile: "trusted_ivan_dm",
+    peer: "@durov",
+    file_path: "/tmp/a.txt",
+  });
+
+  assert.equal(capturedInit.headers["X-OpenClaw-Policy-Profile"], "trusted_ivan_dm");
+  assert.match(result.content[0].text, /File sent/);
+});
+
+test("stable profile tools reject unknown profiles", async () => {
+  const api = createApi();
+  register(api);
+
+  const result = await getTool(api, "telegram_send_message").execute("1", {
+    profile: "missing",
+    peer: "@durov",
+    text: "hello",
+  });
+
+  assert.match(result.content[0].text, /Unknown Telegram profile: missing/);
+});
+
 test("package metadata points OpenClaw runtime to built JavaScript entrypoint", async () => {
   const pkg = JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
   const buildScript = await readFile(new URL("./scripts/build.mjs", import.meta.url), "utf8");
@@ -102,7 +160,7 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
                 writeTo: ["me"],
               },
               {
-                id: "shared",
+                id: "trusted_dm",
                 label: "Shared",
                 policyProfile: "shared",
                 allowFrom: ["-1001"],
@@ -133,11 +191,11 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
   assert.ok(getTool(api, "telegram_owner_download_media"));
   assert.ok(getTool(api, "telegram_owner_get_participants"));
   assert.ok(getTool(api, "telegram_owner_get_admins"));
-  assert.ok(getTool(api, "telegram_shared_get_messages"));
-  assert.equal(getTool(api, "telegram_shared_send_file"), undefined);
-  assert.equal(getTool(api, "telegram_shared_list_dialog_folders"), undefined);
-  assert.equal(getTool(api, "telegram_shared_download_media"), undefined);
-  assert.equal(getTool(api, "telegram_shared_add_contact"), undefined);
+  assert.ok(getTool(api, "telegram_trusted_dm_get_messages"));
+  assert.equal(getTool(api, "telegram_trusted_dm_send_file"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_dm_list_dialog_folders"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_dm_download_media"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_dm_add_contact"), undefined);
   assert.equal(getTool(api, "telegram_user_send_message"), undefined);
 
   let capturedUrl = "";
@@ -182,6 +240,8 @@ test("plugin registers isolated profile toolsets and forwards profile headers", 
 });
 
 test("profile can expose backend file tools without broader privileged tools", async () => {
+  const manifest = JSON.parse(await readFile(new URL("./openclaw.plugin.json", import.meta.url), "utf8"));
+  const declaredTools = new Set(manifest.contracts?.tools ?? []);
   const api = createApi({
     plugins: {
       entries: {
@@ -207,6 +267,10 @@ test("profile can expose backend file tools without broader privileged tools", a
   assert.ok(getTool(api, "telegram_trusted_svetlana_dm_send_voice"));
   assert.ok(getTool(api, "telegram_trusted_svetlana_dm_send_sticker"));
   assert.ok(getTool(api, "telegram_trusted_svetlana_dm_download_media"));
+  assert.ok(declaredTools.has("telegram_trusted_svetlana_dm_send_file"));
+  assert.ok(declaredTools.has("telegram_trusted_svetlana_dm_send_voice"));
+  assert.ok(declaredTools.has("telegram_trusted_svetlana_dm_send_sticker"));
+  assert.ok(declaredTools.has("telegram_trusted_svetlana_dm_download_media"));
   assert.equal(getTool(api, "telegram_trusted_svetlana_dm_add_contact"), undefined);
   assert.equal(getTool(api, "telegram_trusted_svetlana_dm_create_group"), undefined);
   assert.equal(getTool(api, "telegram_trusted_svetlana_dm_leave_chat"), undefined);
@@ -308,7 +372,7 @@ test("explicit interactive profile skips privileged tools by default", async () 
       entries: {
         "telegram-user-bridge": {
           config: {
-            profiles: [{ id: "trusted", label: "Trusted", mode: "interactive", policyProfile: "trusted_dm" }],
+            profiles: [{ id: "trusted_dm", label: "Trusted", mode: "interactive", policyProfile: "trusted_dm" }],
           },
         },
       },
@@ -316,11 +380,11 @@ test("explicit interactive profile skips privileged tools by default", async () 
   });
   register(api);
 
-  assert.ok(getTool(api, "telegram_trusted_send_message"));
-  assert.equal(getTool(api, "telegram_trusted_send_file"), undefined);
-  assert.equal(getTool(api, "telegram_trusted_download_media"), undefined);
-  assert.equal(getTool(api, "telegram_trusted_list_contacts"), undefined);
-  assert.equal(getTool(api, "telegram_trusted_create_group"), undefined);
+  assert.ok(getTool(api, "telegram_trusted_dm_send_message"));
+  assert.equal(getTool(api, "telegram_trusted_dm_send_file"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_dm_download_media"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_dm_list_contacts"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_dm_create_group"), undefined);
 });
 
 test("dialog-folder tools are owner-only even for other privileged profiles", async () => {
@@ -329,7 +393,7 @@ test("dialog-folder tools are owner-only even for other privileged profiles", as
       entries: {
         "telegram-user-bridge": {
           config: {
-            profiles: [{ id: "admin_dm", label: "Admin", mode: "interactive", privilegedTools: true }],
+            profiles: [{ id: "trusted_dm", label: "Admin", mode: "interactive", privilegedTools: true }],
           },
         },
       },
@@ -337,11 +401,11 @@ test("dialog-folder tools are owner-only even for other privileged profiles", as
   });
   register(api);
 
-  assert.ok(getTool(api, "telegram_admin_dm_send_file"));
-  assert.equal(getTool(api, "telegram_admin_dm_join_chat_by_link"), undefined);
-  assert.equal(getTool(api, "telegram_admin_dm_list_dialog_folders"), undefined);
-  assert.equal(getTool(api, "telegram_admin_dm_upsert_dialog_folder"), undefined);
-  assert.equal(getTool(api, "telegram_admin_dm_delete_dialog_folder"), undefined);
+  assert.ok(getTool(api, "telegram_trusted_dm_send_file"));
+  assert.equal(getTool(api, "telegram_trusted_dm_join_chat_by_link"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_dm_list_dialog_folders"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_dm_upsert_dialog_folder"), undefined);
+  assert.equal(getTool(api, "telegram_trusted_dm_delete_dialog_folder"), undefined);
 });
 
 test("plugin downloads media via backend endpoint", async () => {
@@ -571,7 +635,7 @@ test("plugin passes min_id, since_unix and topic_id for polling", async () => {
       entries: {
         "telegram-user-bridge": {
           config: {
-            profiles: [{ id: "shared", policyProfile: "shared" }],
+            profiles: [{ id: "trusted_dm", policyProfile: "shared" }],
           },
         },
       },
@@ -588,7 +652,7 @@ test("plugin passes min_id, since_unix and topic_id for polling", async () => {
     });
   };
 
-  const messagesTool = getTool(api, "telegram_shared_get_messages");
+  const messagesTool = getTool(api, "telegram_trusted_dm_get_messages");
   await messagesTool.execute("1", { peer: -1001, limit: 10, min_id: 77, since_unix: 1710000000, topic_id: 900 });
 
   assert.equal(
@@ -603,7 +667,7 @@ test("sources_ro profile is read-only and exposes source inventory tools", async
       entries: {
         "telegram-user-bridge": {
           config: {
-            profiles: [{ id: "sources", label: "Sources", mode: "sources_ro", policyProfile: "sources_ro" }],
+            profiles: [{ id: "sources_ro", label: "Sources", mode: "sources_ro", policyProfile: "sources_ro" }],
           },
         },
       },
@@ -611,11 +675,11 @@ test("sources_ro profile is read-only and exposes source inventory tools", async
   });
   register(api);
 
-  assert.equal(getTool(api, "telegram_sources_send_message"), undefined);
-  assert.ok(getTool(api, "telegram_sources_list_sources"));
-  assert.ok(getTool(api, "telegram_sources_sync_sources"));
-  assert.ok(getTool(api, "telegram_sources_list_topics"));
-  assert.ok(getTool(api, "telegram_sources_get_messages"));
+  assert.equal(getTool(api, "telegram_sources_ro_send_message"), undefined);
+  assert.ok(getTool(api, "telegram_sources_ro_list_sources"));
+  assert.ok(getTool(api, "telegram_sources_ro_sync_sources"));
+  assert.ok(getTool(api, "telegram_sources_ro_list_topics"));
+  assert.ok(getTool(api, "telegram_sources_ro_get_messages"));
 
   let capturedUrl = "";
   let capturedInit = undefined;
@@ -633,7 +697,7 @@ test("sources_ro profile is read-only and exposes source inventory tools", async
     );
   };
 
-  const listSourcesTool = getTool(api, "telegram_sources_list_sources");
+  const listSourcesTool = getTool(api, "telegram_sources_ro_list_sources");
   const result = await listSourcesTool.execute("1", { refresh: true });
 
   assert.equal(capturedUrl, "http://127.0.0.1:8765/sources?refresh=true");
@@ -647,7 +711,7 @@ test("plugin lists forum topics and formats topic fetch ids", async () => {
       entries: {
         "telegram-user-bridge": {
           config: {
-            profiles: [{ id: "sources", mode: "sources_ro", policyProfile: "sources_ro" }],
+            profiles: [{ id: "sources_ro", mode: "sources_ro", policyProfile: "sources_ro" }],
           },
         },
       },
@@ -669,7 +733,7 @@ test("plugin lists forum topics and formats topic fetch ids", async () => {
     );
   };
 
-  const topicsTool = getTool(api, "telegram_sources_list_topics");
+  const topicsTool = getTool(api, "telegram_sources_ro_list_topics");
   const result = await topicsTool.execute("1", { peer: -1001, limit: 10 });
 
   assert.equal(capturedUrl, "http://127.0.0.1:8765/topics?peer=-1001&limit=10");
@@ -683,7 +747,7 @@ test("plugin formats richer message metadata for source polling", async () => {
       entries: {
         "telegram-user-bridge": {
           config: {
-            profiles: [{ id: "sources", mode: "sources_ro", policyProfile: "sources_ro" }],
+            profiles: [{ id: "sources_ro", mode: "sources_ro", policyProfile: "sources_ro" }],
           },
         },
       },
@@ -715,7 +779,7 @@ test("plugin formats richer message metadata for source polling", async () => {
       }
     );
 
-  const messagesTool = getTool(api, "telegram_sources_get_messages");
+  const messagesTool = getTool(api, "telegram_sources_ro_get_messages");
   const result = await messagesTool.execute("1", { peer: -1001, limit: 10, min_id: 70 });
 
   assert.match(result.content[0].text, /Alice/);
@@ -3080,14 +3144,14 @@ test("transcribe_voice tool IS registered for non-privileged interactive profile
       entries: {
         "telegram-user-bridge": {
           config: {
-            profiles: [{ id: "trusted", label: "Trusted", mode: "interactive" }],
+            profiles: [{ id: "trusted_dm", label: "Trusted", mode: "interactive" }],
           },
         },
       },
     },
   });
   register(api);
-  assert.ok(getTool(api, "telegram_trusted_transcribe_voice"));
+  assert.ok(getTool(api, "telegram_trusted_dm_transcribe_voice"));
 });
 
 test("transcribe_voice tool calls /transcribe_voice endpoint", async () => {
