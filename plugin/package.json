@@ -4,15 +4,26 @@
   "description": "OpenClaw plugin: agent tools for a live Telegram user account via Telethon bridge",
   "type": "module",
   "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "skills"
+  ],
   "openclaw": {
-    "extensions": ["./dist/index.js"]
+    "extensions": ["./dist/index.js"],
+    "compat": {
+      "pluginApi": ">=2026.5.17"
+    },
+    "install": {
+      "minHostVersion": ">=2026.5.17"
+    }
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19"
   },
   "scripts": {
     "build": "node --disable-warning=ExperimentalWarning scripts/build.mjs",
-    "test": "node --test index.test.mjs"
+    "test": "npm run build && node --test index.test.mjs"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0"

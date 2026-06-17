@@ -3,6 +3,9 @@
   "name": "Unofficial Telegram User Bridge",
   "version": "0.1.0",
   "description": "Agent tools and DM channel for one live Telegram user account with isolated OpenClaw contexts and backend-enforced policies.",
+  "activation": {
+    "onStartup": true
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -476,6 +479,11 @@
                   "type": "array",
                   "items": { "type": "string" },
                   "description": "Readable inbound DM sender ids/usernames enforced by the backend"
+                },
+                "groupAllowFrom": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Accepted for OpenClaw doctor compatibility. This DM-only channel ignores group sender allowlists."
                 },
                 "denyFrom": {
                   "type": "array",

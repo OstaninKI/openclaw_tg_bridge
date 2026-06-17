@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import register, { __test } from "./index.ts";
+import register, { __test } from "./dist/index.js";
 
 function createApi(config = {}) {
   const tools = [];
@@ -30,6 +30,11 @@ test("plugin manifest declares static config metadata for owned channel", async 
 
   assert.deepEqual(manifest.channels, ["telegram-user-bridge"]);
   assert.equal(typeof manifest.channelConfigs?.["telegram-user-bridge"]?.schema, "object");
+  assert.equal(
+    manifest.channelConfigs?.["telegram-user-bridge"]?.schema?.properties?.accounts?.additionalProperties?.properties
+      ?.groupAllowFrom?.description,
+    "Accepted for OpenClaw doctor compatibility. This DM-only channel ignores group sender allowlists."
+  );
   assert.ok(Array.isArray(manifest.contracts?.tools));
   assert.ok(manifest.contracts.tools.includes("telegram_*_send_message"));
   assert.ok(manifest.contracts.tools.includes("telegram_*_get_messages"));
@@ -72,6 +77,9 @@ test("package metadata points OpenClaw runtime to built JavaScript entrypoint", 
 
   assert.equal(pkg.main, "./dist/index.js");
   assert.deepEqual(pkg.openclaw?.extensions, ["./dist/index.js"]);
+  assert.equal(pkg.openclaw?.compat?.pluginApi, ">=2026.5.17");
+  assert.equal(pkg.openclaw?.install?.minHostVersion, ">=2026.5.17");
+  assert.equal(pkg.engines?.node, ">=22.19");
   assert.match(pkg.scripts?.build ?? "", /scripts\/build\.mjs/);
   assert.match(buildScript, /dist\/index\.js/);
 });
